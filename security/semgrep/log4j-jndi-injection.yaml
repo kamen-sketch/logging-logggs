@@ -39,10 +39,17 @@ rules:
           if (<... $ALLOWED.contains($X) ...>) { ... }
 
     pattern-sinks:
+      # Both the interface type and InitialContext/DirContext variants are
+      # listed explicitly: Semgrep's lightweight Java type inference does not
+      # always resolve that InitialContext/DirContext implement Context
+      # without a full classpath, so a receiver declared as the concrete type
+      # needs its own pattern or the sink is silently missed.
       - patterns:
           - pattern-either:
               - pattern: (javax.naming.Context $CTX).lookup($NAME)
               - pattern: (javax.naming.InitialContext $CTX).lookup($NAME)
               - pattern: (javax.naming.directory.DirContext $CTX).lookup($NAME)
               - pattern: (javax.naming.Context $CTX).lookupLink($NAME)
+              - pattern: (javax.naming.InitialContext $CTX).lookupLink($NAME)
+              - pattern: (javax.naming.directory.DirContext $CTX).lookupLink($NAME)
           - focus-metavariable: $NAME

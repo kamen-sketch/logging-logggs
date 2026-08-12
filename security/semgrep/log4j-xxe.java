@@ -9,9 +9,9 @@ class XxeCases {
 
     /** No hardening at all: external entities are resolved. */
     public DocumentBuilder unhardened() throws ParserConfigurationException {
+        // ruleid: log4j-xxe
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         factory.setNamespaceAware(true);
-        // ruleid: log4j-xxe
         return factory.newDocumentBuilder();
     }
 

@@ -7,7 +7,30 @@ this codebase, with positive and negative fixtures for `semgrep --test`.
 ./run-tests.sh
 ```
 
-## Status: patterns are UNVERIFIED
+## Is this a false positive? See `dynamic-proof/`
+
+`semgrep --test` only proves a *pattern* matches or doesn't match some text —
+it can't prove the matched sink is actually dangerous, or that the "safe"
+fixture is actually safe rather than just not matching by coincidence. Both
+are what a false positive/negative looks like.
+
+`dynamic-proof/` answers that with runtime evidence instead: it actually
+executes the vulnerable and guarded code paths for all five rules and shows
+the observable difference — a real JNDI `lookup()` call captured with the
+attacker's string, a real `DROP TABLE` payload appearing inside the literal
+SQL reaching `prepareStatement()`, a real local file exfiltrated through an
+XML external entity, real code running during deserialization itself, real
+arbitrary-file-write from text reaching `eval()` — and shows each guarded
+fixture genuinely blocking it, not just failing to match a pattern.
+
+```bash
+cd dynamic-proof && ./run-all.sh
+```
+
+Needs only a JDK — no network, no real LDAP/database/scripting-engine. See
+`dynamic-proof/README.md` for how each proof works.
+
+## Status: Semgrep pattern matching is UNVERIFIED
 
 `semgrep --test` has **not** been run. Semgrep could not be installed in the
 environment these were written in — both package sources are blocked by egress

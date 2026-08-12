@@ -17,7 +17,7 @@ rules:
       ObjectInputStream.readObject(). Deserialization instantiates arbitrary
       classes on the classpath and is exploitable before any type check the
       caller performs. Use a structured format (JSON/XML) for log transport, or
-      constrain the stream with an ObjectInputFilter.
+      constrain the stream with an ObjectInputFilter before calling readObject().
 
     pattern-sources:
       - pattern: (java.net.Socket $S).getInputStream()
@@ -33,13 +33,20 @@ rules:
           - pattern: $B
 
     pattern-sanitizers:
-      # A filter constrains which classes may be instantiated.
-      - pattern: $OIS.setObjectInputFilter(...)
-      - pattern: java.io.ObjectInputFilter.Config.createFilter($SPEC)
+      # Constructing an ObjectInputStream is harmless by itself; the danger is
+      # calling readObject() on one that was never filtered. setObjectInputFilter
+      # is a void call that mutates the *future* safety of its receiver rather
+      # than returning a cleaned value, so by-side-effect marks $OIS itself
+      # un-tainted for everything after this call in the same scope.
+      - patterns:
+          - pattern: $OIS.setObjectInputFilter(...)
+        by-side-effect: true
 
     pattern-sinks:
+      # The sink is the readObject() call, not the constructor: the taint that
+      # matters is on the ObjectInputStream receiver itself (it was built from
+      # an untrusted stream), which is why focus-metavariable targets $OIS
+      # rather than an argument -- readObject() takes none.
       - patterns:
-          - pattern-either:
-              - pattern: new java.io.ObjectInputStream($STREAM)
-              - pattern: new java.io.ObjectInputStream(new java.io.ByteArrayInputStream($STREAM))
-          - focus-metavariable: $STREAM
+          - pattern: $OIS.readObject()
+          - focus-metavariable: $OIS
