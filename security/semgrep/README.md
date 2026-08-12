@@ -42,11 +42,10 @@ evidence, the one case where reachability no longer exists at all: the
 deserialization CVE's vulnerable component was removed from this branch's
 source, not patched. See `dynamic-proof/real-source/README.md`.
 
-## Status: Semgrep pattern matching is UNVERIFIED
+## Status: Semgrep pattern matching is VERIFIED — in CI, not in this sandbox
 
-`semgrep --test` has **not** been run. Semgrep could not be installed in the
-environment these were written in — both package sources are blocked by egress
-policy:
+`semgrep --test` cannot run in the sandbox these rules were authored in —
+both PyPI and npm are blocked by egress policy there:
 
 ```
 $ pip install semgrep
@@ -56,10 +55,19 @@ $ curl https://registry.npmjs.org/semgrep
 Host not in allowlist: registry.npmjs.org
 ```
 
-So treat the rules as reviewed-but-untested: the sinks and sanitizers are read
-off the real source (line references below), but whether each *pattern* matches
-what it is meant to match has not been demonstrated. Run `./run-tests.sh` where
-Semgrep is available before relying on them or wiring them into CI.
+GitHub-hosted Actions runners aren't behind that proxy, so
+`.github/workflows/semgrep-rules-test.yaml` runs it there instead. Current
+status, from the actual log content (not just the green checkmark):
+
+```
+5/5: ✓ All tests passed
+```
+
+That took several rounds: the workflow's first runs failed on real bugs —
+a missing `pyyaml` dependency, three pattern/annotation mismatches, and (in
+the adversarial-fixture round below) three sanitizers that were unbound to
+the variable actually reaching the sink. Run `./run-tests.sh` locally where
+Semgrep is installable to reproduce; it picks up Semgrep automatically.
 
 What `validate.py` **does** verify locally, and passes:
 
@@ -72,16 +80,63 @@ What `validate.py` **does** verify locally, and passes:
 
 ## Rules
 
-| Rule | CWE | Sink | Grounded in |
-|---|---|---|---|
-| `log4j-jndi-injection` | CWE-74 | `Context.lookup` | `net/JndiManager.java:244` |
-| `log4j-script-injection` | CWE-94 | `ScriptEngine.eval` | `script/ScriptManager.java:260` |
-| `log4j-sql-injection` | CWE-89 | `prepareStatement` / `execute*` | `appender/db/jdbc/JdbcDatabaseManager.java:125,728` |
-| `log4j-unsafe-deserialization` | CWE-502 | `readObject()` | CVE-2019-17571 |
-| `log4j-xxe` | CWE-611 | `newDocumentBuilder` | `config/xml/XmlConfiguration.java:175` |
+| Rule | CWE | Sink | Severity | Reachable unauthenticated? |
+|---|---|---|---|---|
+| `log4j-jndi-injection` | CWE-74 | `Context.lookup` | WARNING | No — gated behind explicit opt-in |
+| `log4j-script-injection` | CWE-94 | `ScriptEngine.eval` | WARNING | No — config-controlled input only |
+| `log4j-sql-injection` | CWE-89 | `prepareStatement` / `execute*` | WARNING | No — config-controlled input only |
+| `log4j-unsafe-deserialization` | CWE-502 | `readObject()` | WARNING | No — sink removed from source entirely |
+| `log4j-xxe` | CWE-611 | `newDocumentBuilder` | WARNING | No — parses the trusted config file itself |
 
 22 positive, 13 negative, and 2 `todoruleid` (known-gap, not enforced)
-fixture cases.
+fixture cases. Each rule's `metadata.reachability` field carries the
+specific evidence (see "Not reachable from unauthenticated input" below).
+
+## Not reachable from unauthenticated input — but not a false positive either
+
+After the false-negative fixes below, a further question came up: is any of
+this reachable by an unauthenticated remote attacker in this codebase's
+actual current source? `dynamic-proof/real-source/` had already answered
+this per rule while investigating reachability generally (see that
+directory's README) — the answer is no, across all five:
+
+- **JNDI**: three independent layers block the original Log4Shell vector
+  specifically (message content is never interpolated; `Interpolator`
+  excludes `jndi` from its dispatch map by default; `JndiLookup`'s
+  constructor refuses to run without an explicit
+  `log4j2.enableJndiLookup=true`). Reaching the sink at all requires that
+  opt-in plus a `${jndi:...}` lookup authored into the configuration.
+- **SQL / Script**: both sinks consume values that come from Log4j
+  *configuration* (`<JDBC tableName>`, `<Script>`/`<ScriptFile>`), authored
+  by whoever controls the configuration file — never from a log message or
+  other remote input.
+- **XXE**: the parser in question parses the `log4j2.xml` configuration
+  file itself, loaded from a trusted classpath resource or configured path
+  at startup — not from a network request.
+- **Deserialization**: stronger still — the vulnerable component
+  (`TcpSocketServer`/`UdpSocketServer`) was removed from this branch's
+  source entirely, so there is no sink left to reach at all.
+
+The common thread: every one of these requires **control over the Log4j
+configuration** (a materially higher trust boundary than "unauthenticated
+network attacker") or, for deserialization, doesn't exist as a live sink at
+all. `severity` was downgraded from `ERROR` to `WARNING` across the board
+to reflect that, and `log4j-jndi-injection`'s and
+`log4j-unsafe-deserialization`'s `confidence` moved from `HIGH` to `MEDIUM`
+to match the other three, which already accounted for this.
+
+**Why this isn't "false positive," despite not being remotely exploitable
+here**: `dynamic-proof/` (the non-real-source proofs) already established
+that when these sinks *are* reached, they do real damage — a real JNDI
+lookup fires with the attacker's URL, a real `DROP TABLE` payload lands
+verbatim in the SQL text, real code runs during deserialization itself. A
+false positive is a rule flagging code that was never dangerous in the
+first place; what's true here instead is narrower *reachability* in this
+one codebase's current, default configuration. The rules stay in the
+ruleset because they still catch: a regression that reopens one of these
+paths, a deployment that explicitly re-enables the legacy JNDI opt-in, or
+different code (a plugin, a fork, an unrelated project) reusing these same
+sink APIs without the same guards.
 
 ## Known gap: conditional hardening/filtering is not detected
 

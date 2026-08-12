@@ -10,16 +10,30 @@
 rules:
   - id: log4j-unsafe-deserialization
     languages: [java]
-    severity: ERROR
+    severity: WARNING
     metadata:
       cwe: "CWE-502: Deserialization of Untrusted Data"
       category: security
-      confidence: HIGH
+      confidence: MEDIUM
       references:
         - https://nvd.nist.gov/vuln/detail/CVE-2019-17571
       grounding: >-
         Log4j's socket/JMS receivers accept serialized log events; CVE-2019-17571
         was exactly this sink reachable from a network stream.
+      reachability: >-
+        NOT reachable at all in this codebase's current source -- a
+        stronger statement than "requires config control." Investigated
+        rather than assumed (see
+        dynamic-proof/real-source/DESERIALIZATION_FINDING.md):
+        TcpSocketServer/UdpSocketServer, log4j-core's equivalent of log4j
+        1.x's SocketServer/SocketNode and the actual component
+        CVE-2019-17571 refers to, genuinely existed -- the changelog shows
+        its ObjectInputFilter mitigation (LOG4J2-1863) -- but has been
+        removed from this branch's source entirely, not merely patched.
+        There is no real-source proof here because there is no real sink
+        left to reach. The rule is kept as a general CWE-502 pattern check
+        for other code (present or future, in this codebase or elsewhere)
+        that deserializes a stream without a preceding filter.
     message: >-
       readObject() is called on an ObjectInputStream with no preceding
       ObjectInputFilter on the same variable. Deserialization instantiates

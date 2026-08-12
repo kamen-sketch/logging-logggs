@@ -9,6 +9,19 @@ rules:
       category: security
       confidence: MEDIUM
       grounding: log4j-core/src/main/java/org/apache/logging/log4j/core/config/xml/XmlConfiguration.java:175
+      reachability: >-
+        NOT reachable from unauthenticated remote input, confirmed by
+        driving the real XmlConfiguration.newDocumentBuilder() (see
+        dynamic-proof/real-source/org/apache/logging/log4j/core/config/xml/XxeRealSourceProof.java).
+        It parses the log4j2.xml CONFIGURATION FILE itself, loaded from a
+        trusted classpath resource or configured path
+        (ConfigurationFactory/ConfigurationSource.fromUri/fromResource) at
+        startup -- not from remote, unauthenticated network input. The rule
+        is a general hardening check, useful for other XML parsing code
+        (present or future) that lacks XmlConfiguration's unconditional
+        hardening, rather than a live finding against XmlConfiguration
+        itself, which is already fully hardened with no configuration flag
+        to disable it.
     message: >-
       A DocumentBuilderFactory is used without disabling DTD and external-entity
       processing, so a configuration file can read local files or reach the

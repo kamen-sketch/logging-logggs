@@ -2,14 +2,31 @@ rules:
   - id: log4j-jndi-injection
     mode: taint
     languages: [java]
-    severity: ERROR
+    severity: WARNING
     metadata:
       cwe: "CWE-74: Improper Neutralization of Special Elements in Output Used by a Downstream Component ('Injection')"
       category: security
-      confidence: HIGH
+      confidence: MEDIUM
       references:
         - https://nvd.nist.gov/vuln/detail/CVE-2021-44228
       grounding: log4j-core/src/main/java/org/apache/logging/log4j/core/net/JndiManager.java:244
+      reachability: >-
+        NOT reachable from unauthenticated remote input in this codebase's
+        current source, confirmed by driving the real compiled classes (see
+        dynamic-proof/real-source/JndiRealSourceProof.java). Three layers
+        block the original Log4Shell vector specifically: log message
+        content is never interpolated at all (MessagePatternConverter,
+        unconditional), JndiLookup is excluded from Interpolator's dispatch
+        map by default, and JndiLookup's own constructor refuses to run
+        without an operator explicitly setting
+        log4j2.enableJndiLookup=true. Reaching this sink at all requires
+        either that explicit opt-in plus authoring a ${jndi:...} lookup
+        directly into the Log4j configuration, or reusing this same
+        unguarded pattern in different code -- i.e. it requires control over
+        configuration or source, not an unauthenticated network request.
+        severity/confidence reflect that narrower attack surface; the rule
+        is kept for regressions and for other code reusing this sink
+        without the same guards.
     message: >-
       Attacker-controlled data reaches a JNDI Context.lookup() without a URI
       scheme check. A JNDI name such as "ldap://attacker/a" makes the JVM fetch

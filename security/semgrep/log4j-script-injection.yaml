@@ -2,12 +2,22 @@ rules:
   - id: log4j-script-injection
     mode: taint
     languages: [java]
-    severity: ERROR
+    severity: WARNING
     metadata:
       cwe: "CWE-94: Improper Control of Generation of Code ('Code Injection')"
       category: security
       confidence: MEDIUM
       grounding: log4j-core/src/main/java/org/apache/logging/log4j/core/script/ScriptManager.java:260
+      reachability: >-
+        NOT reachable from unauthenticated remote input, confirmed by
+        driving the real ScriptManager.addScript()/execute() (see
+        dynamic-proof/real-source/ScriptRealSourceProof.java). Script text
+        comes from Log4j CONFIGURATION (<Script>/<ScriptFile> elements),
+        authored by whoever controls the configuration file -- not data
+        that flows in from a log message or any other remote, unauthenticated
+        input. severity/confidence reflect that narrower attack surface; the
+        rule is kept for regressions and for other code reusing
+        ScriptEngine.eval() without the same trust boundary.
     message: >-
       Attacker-controlled data reaches ScriptEngine.eval(). A JSR-223 engine
       executes arbitrary code with the privileges of the JVM, so script text
