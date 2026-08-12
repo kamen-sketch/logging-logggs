@@ -8,6 +8,22 @@ collects what was found, including the one vector that turned out to be
 wrong on closer inspection, and states plainly which rules each surviving
 vector applies to.
 
+**One distinction this whole note depends on, worth stating up front**:
+"delivery vector" and "sink" are two different questions with two
+different answers. `log4j-xinclude`'s own finding — `XmlConfiguration`
+enabling XInclude unconditionally, uncovered by the DTD/XXE hardening next
+to it — is a real, confirmed gap in Log4j's own code, unaffected by any of
+what follows. What varies per vector below is only *how a bug bounty
+hunter's or attacker's content reaches that sink at all*, and for some of
+these vectors (5, specifically) reaching it isn't a Log4j bug either — it
+depends on an operator having exposed a different, intended feature
+without the access control that feature assumes. Retracted (3) means
+"doesn't work as a general scenario, full stop." Intended-feature (5)
+means something different: "works, but the part that's a security problem
+lives entirely outside Log4j's own code, in how JMX access was set up."
+Neither of those changes whether `log4j-xinclude` itself is a real
+finding — it does.
+
 ## The vectors, in the order they were found — and corrected
 
 | # | Vector | Filesystem write to host app? | Env var/property attacker-set? | Needs a URL at all? | `monitorInterval` needed? | Status |
@@ -16,7 +32,7 @@ vector applies to.
 | 2 | Config-location property/env var pointed at a URL (`log4j.configurationFile` / `LOG4J_CONFIGURATION_FILE`) | No | Yes | Yes (attacker-hosted) | No | **Holds** — proven end to end |
 | 3 | Classpath resource shadowing via an uploaded plugin's own classloader | No | No | No | No | **Retracted as a general claim** — only works under a narrow, attacker-uncontrolled ordering |
 | 4 | Takeover of an already-trusted, polled config URL (`HttpWatcher`) | No | No | Yes (someone else's, taken over) | **Yes** | **Holds** — proven end to end |
-| 5 | JMX `LoggerContextAdminMBean.setConfigText()` — config content pushed directly, no URL | No | No | **No** | No | **Holds** — proven end to end |
+| 5 | JMX `LoggerContextAdminMBean.setConfigText()` — config content pushed directly, no URL | No | No | **No** | No | **Holds as a delivery path — but not a Log4j bug.** The MBean is intended remote-management behavior; the security problem is entirely in JMX's own access control, external to Log4j. |
 
 Vector 4 was found in response to being asked for a way needing neither an
 env var nor a plugin — but it still needed `monitorInterval` and an
