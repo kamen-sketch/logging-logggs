@@ -1,6 +1,14 @@
+# Not taint mode: the first attempt used mode: taint with a by-side-effect
+# sanitizer on setObjectInputFilter(), but that did not actually desanitize
+# $OIS for the later readObject() call (confirmed by semgrep --test in CI --
+# the "safe" fixture still matched). A sequential pattern/pattern-not, the
+# same style log4j-xxe uses, sidesteps that: it matches any
+# ObjectInputStream.readObject() that isn't preceded by a filter call on the
+# same variable, regardless of where the stream came from -- more
+# conservative than taint-tracking a specific source, and simpler to get
+# right.
 rules:
   - id: log4j-unsafe-deserialization
-    mode: taint
     languages: [java]
     severity: ERROR
     metadata:
@@ -13,40 +21,21 @@ rules:
         Log4j's socket/JMS receivers accept serialized log events; CVE-2019-17571
         was exactly this sink reachable from a network stream.
     message: >-
-      A stream that is not provably trusted is deserialized with
-      ObjectInputStream.readObject(). Deserialization instantiates arbitrary
-      classes on the classpath and is exploitable before any type check the
-      caller performs. Use a structured format (JSON/XML) for log transport, or
-      constrain the stream with an ObjectInputFilter before calling readObject().
+      readObject() is called on an ObjectInputStream with no preceding
+      ObjectInputFilter on the same variable. Deserialization instantiates
+      arbitrary classes on the classpath and is exploitable before any type
+      check the caller performs. Use a structured format (JSON/XML) for log
+      transport, or constrain the stream with setObjectInputFilter() before
+      calling readObject().
 
-    pattern-sources:
-      - pattern: (java.net.Socket $S).getInputStream()
-      - pattern: (java.net.ServerSocket $S).accept().getInputStream()
-      - pattern: (java.net.HttpURLConnection $C).getInputStream()
-      - patterns:
-          - pattern-inside: |
-              $RET $METHOD(..., java.io.InputStream $IN, ...) { ... }
-          - pattern: $IN
-      - patterns:
-          - pattern-inside: |
-              $RET $METHOD(..., byte[] $B, ...) { ... }
-          - pattern: $B
-
-    pattern-sanitizers:
-      # Constructing an ObjectInputStream is harmless by itself; the danger is
-      # calling readObject() on one that was never filtered. setObjectInputFilter
-      # is a void call that mutates the *future* safety of its receiver rather
-      # than returning a cleaned value, so by-side-effect marks $OIS itself
-      # un-tainted for everything after this call in the same scope.
-      - patterns:
-          - pattern: $OIS.setObjectInputFilter(...)
-        by-side-effect: true
-
-    pattern-sinks:
-      # The sink is the readObject() call, not the constructor: the taint that
-      # matters is on the ObjectInputStream receiver itself (it was built from
-      # an untrusted stream), which is why focus-metavariable targets $OIS
-      # rather than an argument -- readObject() takes none.
-      - patterns:
-          - pattern: $OIS.readObject()
-          - focus-metavariable: $OIS
+    patterns:
+      - pattern: |
+          $OIS = new java.io.ObjectInputStream(...);
+          ...
+          $OIS.readObject();
+      - pattern-not: |
+          $OIS = new java.io.ObjectInputStream(...);
+          ...
+          $OIS.setObjectInputFilter(...);
+          ...
+          $OIS.readObject();

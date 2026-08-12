@@ -40,11 +40,13 @@ cp -r "$SRC/log4j-api/src/main/resources/." "$OUT/api/" 2>/dev/null
 # Compress, ZeroMQ, mail) plus the OSGi bundle-activator integration classes.
 step "3/5  compiling log4j-core (optional-dependency appenders excluded)"
 # Excluded = needs a genuinely absent third-party library (Jackson, JMS, mail,
-# Kafka, ZeroMQ, CSV, MongoDB/JDBC). Everything else -- including the whole
-# async package and ZipCompressAction (java.util.zip only) -- is compiled.
+# Kafka, ZeroMQ, CSV, MongoDB/NoSQL). Everything else -- including the whole
+# async package, ZipCompressAction (java.util.zip only), and appender/db/jdbc
+# (java.sql only -- MongoDB lives in a separate top-level module, not here) --
+# is compiled.
 find "$SRC/log4j-core/src/main/java" -name '*.java' ! -name 'module-info.java' \
   | grep -vE '/core/(jackson|parser)/' \
-  | grep -vE '/appender/(mom|nosql|db)/' \
+  | grep -vE '/appender/(mom|nosql)/' \
   | grep -vE '/(JsonLayout|YamlLayout|AbstractJacksonLayout|XmlLayout|JacksonFactory)\.java$' \
   | grep -vE '/(YamlConfiguration|YamlConfigurationFactory|JsonConfiguration|JsonConfigurationFactory)\.java$' \
   | grep -vE '/(CsvParameterLayout|CsvLogEventLayout|AbstractCsvLayout)\.java$' \

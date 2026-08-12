@@ -88,3 +88,19 @@ actually run — see `../README.md`) verifies the *pattern* fires on the right
 lines. This verifies the lines it fires on describe *real* vulnerable
 behaviour, and the lines it stays quiet on are *really* safe. A rule can pass
 one and fail the other; both were needed.
+
+## One more layer: `real-source/`
+
+Everything above uses a `Proxy` or a hand-written interpreter standing in for
+the real sink API (`Context`, `Connection`, `ScriptEngine`). That proves the
+*API* is dangerous in general — it says nothing about whether *this
+codebase's actual classes* are reachable from untrusted input, or actually
+guarded, right now. `real-source/` answers that by compiling against the
+real classes in `../../../nomaven-build/out/` and driving their real public
+entry points instead — a log message through the real
+`MessagePatternConverter → Interpolator → JndiLookup → JndiManager` pipeline,
+a malicious table name through the real `JdbcDatabaseManager.getManager()`,
+and so on. It also documents, with evidence rather than assumption, the one
+case where no such path exists any more: the deserialization CVE's
+vulnerable component was removed from this branch's source entirely, not
+patched. See `real-source/README.md`.

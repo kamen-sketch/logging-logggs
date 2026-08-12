@@ -30,6 +30,18 @@ cd dynamic-proof && ./run-all.sh
 Needs only a JDK — no network, no real LDAP/database/scripting-engine. See
 `dynamic-proof/README.md` for how each proof works.
 
+That still uses stand-ins (a `Proxy` for `Context`, a hand-written
+`ScriptEngine`) for the sink *API*, which says nothing about whether *this
+codebase's actual classes* are reachable and guarded right now.
+`dynamic-proof/real-source/` goes one step further: it compiles against the
+real Log4j classes built by `../../nomaven-build/` and drives their real
+public entry points — a log message through the real message-formatting →
+lookup pipeline, a malicious table name through the real
+`JdbcDatabaseManager.getManager()`. It also found, and documented with
+evidence, the one case where reachability no longer exists at all: the
+deserialization CVE's vulnerable component was removed from this branch's
+source, not patched. See `dynamic-proof/real-source/README.md`.
+
 ## Status: Semgrep pattern matching is UNVERIFIED
 
 `semgrep --test` has **not** been run. Semgrep could not be installed in the
@@ -65,14 +77,22 @@ What `validate.py` **does** verify locally, and passes:
 | `log4j-jndi-injection` | CWE-74 | `Context.lookup` | `net/JndiManager.java:244` |
 | `log4j-script-injection` | CWE-94 | `ScriptEngine.eval` | `script/ScriptManager.java:260` |
 | `log4j-sql-injection` | CWE-89 | `prepareStatement` / `execute*` | `appender/db/jdbc/JdbcDatabaseManager.java:125,728` |
-| `log4j-unsafe-deserialization` | CWE-502 | `new ObjectInputStream` | CVE-2019-17571 |
+| `log4j-unsafe-deserialization` | CWE-502 | `readObject()` | CVE-2019-17571 |
 | `log4j-xxe` | CWE-611 | `newDocumentBuilder` | `config/xml/XmlConfiguration.java:175` |
 
 19 positive and 13 negative fixture cases.
 
-The first four are `mode: taint`. `log4j-xxe` is a search rule, because a
-missing-hardening flaw has no source to taint — it matches the construction of
-an unhardened parser instead.
+`log4j-jndi-injection`, `log4j-script-injection`, and `log4j-sql-injection`
+are `mode: taint`. `log4j-xxe` and `log4j-unsafe-deserialization` are
+sequential-pattern search rules instead: XXE's missing-hardening flaw has no
+source to taint (it matches the construction of an unhardened parser), and
+deserialization's first taint-mode attempt — a `by-side-effect` sanitizer on
+`setObjectInputFilter()` — turned out not to actually desanitize the
+variable for a later `readObject()` call (semgrep --test caught this as a
+false positive on the "safe" fixture). A sequential `pattern`/`pattern-not`
+requiring a filter call between construction and `readObject()` on the same
+variable proved simpler to get right, at the cost of matching any unfiltered
+`readObject()` rather than only ones from a provably untainted source.
 
 ### Sanitizers are modelled on the real fixes
 
