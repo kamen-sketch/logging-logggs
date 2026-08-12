@@ -26,10 +26,16 @@ rules:
       - pattern: $EVENT.getMessage().getFormattedMessage()
 
     pattern-sanitizers:
-      # Identifier validated against a strict character class.
-      - pattern: |
-          if (<... $X.matches("...") ...>) { ... }
-      - pattern: $X.matches($RE)
+      # Bound to the SAME name reaching the sink: $NAME.matches(...) checks
+      # the value directly, so an unrelated matches() call on some OTHER
+      # variable physically nearby does not match -- confirmed by an
+      # adversarial regression case (see insertInsideUnrelatedMatchesCheck
+      # in the fixture) that an earlier, unbound version of this sanitizer
+      # (a bare "if (<... $X.matches(...) ...>) { ... }") wrongly suppressed.
+      - patterns:
+          - pattern-inside: |
+              if (<... $NAME.matches("...") ...>) { ... }
+          - pattern: $NAME
       # Bound parameters are safe by construction.
       - pattern: (java.sql.PreparedStatement $S).setString($I, $V)
 

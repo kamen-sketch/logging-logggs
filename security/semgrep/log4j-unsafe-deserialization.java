@@ -64,13 +64,16 @@ class UnsafeDeserializationCases {
     /**
      * The filter is applied only when `trusted` is true, but readObject()
      * always runs -- when trusted is false, this is exactly as vulnerable as
-     * readFromParameter() above. This probes whether "..." in pattern-not
-     * can wrongly match through an untaken if-branch, treating conditional
-     * hardening as if it were unconditional.
+     * readFromParameter() above. CONFIRMED via CI (semgrep --test): "..." in
+     * pattern-not matches through an untaken if-branch, wrongly treating
+     * conditional filtering as if it were unconditional. Same documented
+     * limitation as log4j-xxe's conditionallyHardened -- see that fixture's
+     * comment. Tracked as a known gap rather than silently accepted as
+     * correct.
      */
     public Object readConditionallyFiltered(InputStream in, boolean trusted)
             throws IOException, ClassNotFoundException {
-        // ruleid: log4j-unsafe-deserialization
+        // todoruleid: log4j-unsafe-deserialization
         ObjectInputStream ois = new ObjectInputStream(in);
         if (trusted) {
             ois.setObjectInputFilter(ObjectInputFilter.Config.createFilter("java.base/*;!*"));

@@ -30,13 +30,24 @@ rules:
       - pattern: org.apache.logging.log4j.ThreadContext.get($K)
 
     pattern-sanitizers:
-      # The post-Log4Shell guard: only an absent or "java:" scheme is allowed.
+      # Bound to the SAME name reaching the sink, via the URI built from it:
+      # new URI($NAME) ... if (<... $U.getScheme() ...>). An unrelated
+      # getScheme() check on some OTHER variable physically nearby does not
+      # match, because $NAME must be the exact value used to construct $U --
+      # confirmed by an adversarial regression case (see
+      # lookupInsideUnrelatedSchemeCheck in the fixture) that an earlier,
+      # unbound version of this sanitizer wrongly suppressed.
       - patterns:
           - pattern-inside: |
+              $U = new java.net.URI($NAME);
+              ...
               if (<... $U.getScheme() ...>) { ... }
-      # Explicit allow-list membership tests.
-      - pattern: |
-          if (<... $ALLOWED.contains($X) ...>) { ... }
+          - pattern: $NAME
+      # Bound to the SAME name via allow-list membership: $ALLOWED.contains($NAME).
+      - patterns:
+          - pattern-inside: |
+              if (<... $ALLOWED.contains($NAME) ...>) { ... }
+          - pattern: $NAME
 
     pattern-sinks:
       # Both the interface type and InitialContext/DirContext variants are

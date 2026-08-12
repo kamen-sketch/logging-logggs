@@ -80,7 +80,37 @@ What `validate.py` **does** verify locally, and passes:
 | `log4j-unsafe-deserialization` | CWE-502 | `readObject()` | CVE-2019-17571 |
 | `log4j-xxe` | CWE-611 | `newDocumentBuilder` | `config/xml/XmlConfiguration.java:175` |
 
-19 positive and 13 negative fixture cases.
+22 positive, 13 negative, and 2 `todoruleid` (known-gap, not enforced)
+fixture cases.
+
+## Known gap: conditional hardening/filtering is not detected
+
+A deep re-review added one adversarial case per rule — code that is
+genuinely vulnerable but structured to probe whether a guard nearby, without
+actually protecting the tainted value, would wrongly suppress the finding.
+Testing them via CI (not just reasoning about the YAML) found real bugs in
+**all five rules**, now split into two outcomes:
+
+**Fixed** — `log4j-jndi-injection`, `log4j-sql-injection`,
+`log4j-script-injection`: each sanitizer was written as an unbound
+`if (<... $CHECK(...) ...>) { ... }` with no connection between the checked
+variable and the one reaching the sink, so a guard checking a *different,
+unrelated* variable inside the same if-block wrongly sanitized the real
+payload. Fixed by binding the sanitizer's metavariable to the sink's via
+`pattern-inside` + `pattern: $NAME`, the same idiom already used for
+`pattern-sources` in these rules. See `lookupInsideUnrelatedSchemeCheck`,
+`insertInsideUnrelatedMatchesCheck`, `evalInsideUnrelatedAllowListCheck`.
+
+**Not fixed, documented instead** — `log4j-xxe`'s `conditionallyHardened`
+and `log4j-unsafe-deserialization`'s `readConditionallyFiltered`: hardening
+or filtering applied in only *one branch* of an `if`, while the dangerous
+call runs unconditionally, is still flagged as safe. `...` in `pattern-not`
+was confirmed via CI to match straight through an untaken if-branch — a real
+limitation of sequential AST pattern matching without a true
+control-flow-sensitive dataflow engine, not a wording problem a different
+pattern was found to fix. Marked `// todoruleid:` rather than `// ruleid:`
+so the ruleset is honest about what it currently can't catch, instead of
+either silently missing it or having a fixture that permanently fails.
 
 `log4j-jndi-injection`, `log4j-script-injection`, and `log4j-sql-injection`
 are `mode: taint`. `log4j-xxe` and `log4j-unsafe-deserialization` are
