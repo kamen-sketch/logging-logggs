@@ -254,6 +254,19 @@ test harness along the way (the mock HTTP server needed a `Last-Modified`
 header or Log4j silently declines to install any watcher):
 `XIncludeWatcherTakeoverProof.java`.
 
+Asked once more, for something needing neither a URL nor `monitorInterval`
+at all — genuinely attacker-controlled content, not infrastructure that
+has to be taken over first — one more vector held:
+`LoggerContextAdminMBean.setConfigText(String, String)`, a real
+JMX-managed operation (`jmx/LoggerContextAdmin.java:201`, its own log line
+literally reading `"Remote request to reconfigure from config text"`)
+that runs a pushed string directly through the same config pipeline, no
+URL or file involved. Proven end to end via the real MBean on the
+platform `MBeanServer`: `XIncludeJmxProof.java`. Its one real precondition
+— Log4j's JMX instrumentation, off by default — is stated plainly in
+`CONFIG_DELIVERY_VECTORS.md`, along with why standing up a real remote
+RMI listener wasn't necessary to test the part that mattered here.
+
 The full, corrected comparison of every vector investigated in this
 session — including which of the *surviving* ones generalize to
 `log4j-sql-injection`/`log4j-script-injection` too, and the one honest

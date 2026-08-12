@@ -2,7 +2,7 @@
 
 Every rule except `log4j-ssl-hostname-verification` shares the same
 prerequisite: **the attacker needs to control what Log4j parses as
-configuration.** That prerequisite was investigated five times in this
+configuration.** That prerequisite was investigated six times in this
 session, and — importantly — not every investigation held up. This note
 collects what was found, including the one vector that turned out to be
 wrong on closer inspection, and states plainly which rules each surviving
@@ -10,20 +10,20 @@ vector applies to.
 
 ## The vectors, in the order they were found — and corrected
 
-| # | Vector | Filesystem write to host app? | Env var/property attacker-set? | CI/CD access? | Status |
-|---|---|---|---|---|---|
-| 1 | Direct filesystem write to `log4j2.xml` | Yes, by definition | No | No | Superseded — pushed back on as circular (see `XINCLUDE_FINDING.md`) |
-| 2 | Config-location property/env var pointed at a URL (`log4j.configurationFile` / `LOG4J_CONFIGURATION_FILE`) | No | Yes | Only if that's *how* the env var is reached | **Holds** — proven end to end |
-| 3 | Classpath resource shadowing via an uploaded plugin's own classloader | No | No | No | **Retracted as a general claim** — proven to only work under a narrow, attacker-uncontrolled ordering; does not hold as a realistic scenario |
-| 4 | Takeover of an already-trusted, `monitorInterval`-polled config URL (`HttpWatcher`) | No | No | No | **Holds** — proven end to end |
+| # | Vector | Filesystem write to host app? | Env var/property attacker-set? | Needs a URL at all? | `monitorInterval` needed? | Status |
+|---|---|---|---|---|---|---|
+| 1 | Direct filesystem write to `log4j2.xml` | Yes, by definition | No | No | No | Superseded — pushed back on as circular (see `XINCLUDE_FINDING.md`) |
+| 2 | Config-location property/env var pointed at a URL (`log4j.configurationFile` / `LOG4J_CONFIGURATION_FILE`) | No | Yes | Yes (attacker-hosted) | No | **Holds** — proven end to end |
+| 3 | Classpath resource shadowing via an uploaded plugin's own classloader | No | No | No | No | **Retracted as a general claim** — only works under a narrow, attacker-uncontrolled ordering |
+| 4 | Takeover of an already-trusted, polled config URL (`HttpWatcher`) | No | No | Yes (someone else's, taken over) | **Yes** | **Holds** — proven end to end |
+| 5 | JMX `LoggerContextAdminMBean.setConfigText()` — config content pushed directly, no URL | No | No | **No** | No | **Holds** — proven end to end |
 
-Vector 4 was found in direct response to being asked for another way that
-needs neither an env var nor a plugin. Unlike vector 2, the attacker never
-sets or touches `log4j.configurationFile`/`LOG4J_CONFIGURATION_FILE` at
-all — that property is set exactly once, by legitimate operators, before
-any attacker is involved. Unlike vector 3, it does not depend on an
-attacker-uncontrolled timing race; it fires deterministically every
-`monitorInterval` once the takeover has happened.
+Vector 4 was found in response to being asked for a way needing neither an
+env var nor a plugin — but it still needed `monitorInterval` and an
+existing, already-trusted URL to take over. Vector 5 was found in response
+to being asked for something narrower still: no `monitorInterval`, and the
+content genuinely, directly attacker-controlled rather than depending on
+compromising something that was already someone else's.
 
 ### Vector 1 — superseded
 
@@ -136,32 +136,87 @@ response with no `Last-Modified` header produces exactly that. Real HTTP
 config servers normally send one; the proof's test server was fixed to
 send one too, rather than the finding being quietly quiet-failed past.
 
-## Which rules do the surviving vectors (2 and 4) actually reach?
+### Vector 5 — holds, and needs neither a URL nor `monitorInterval` at all
+
+Asked for something narrower than vector 4: no `monitorInterval`, and the
+content genuinely, directly attacker-controlled — not dependent on
+compromising infrastructure that already belonged to someone else.
+
+Log4j ships a JMX-managed operation for exactly this:
+`LoggerContextAdminMBean.setConfigText(String configText, String
+charsetName)` (`log4j-core/.../jmx/LoggerContextAdmin.java:201`), whose own
+internal log message is literally `"Remote request to reconfigure from
+config text"` — a real, documented remote-management feature, not
+something pieced together from unrelated parts. It takes the configuration
+as a raw string and runs it through the exact same
+`ConfigurationFactory.getInstance().getConfiguration()` path every other
+config source in this investigation goes through. There is no URL to host,
+no file to write, and nothing that has to already be trusted and later
+subverted — the attacker's payload is sent directly, the moment they reach
+this operation.
+
+`XIncludeJmxProof.java` proves it end to end: with Log4j's JMX
+instrumentation enabled, the real `LoggerContextAdmin` MBean is located on
+the platform `MBeanServer` (`mbs.queryNames(...)`, exactly as
+`LoggerContextAdminMBean`'s own Javadoc documents doing), and a single
+`setConfigText()` invocation carrying the XInclude/exfil payload as a
+plain string leaks the secret.
+
+The one real precondition, stated plainly: Log4j's JMX instrumentation is
+**disabled by default** (`JmxUtil.isJmxDisabled()` defaults to `true`) — an
+operator has to explicitly set `log4j2.disable.jmx=false`. That's not
+something the attacker does, and it's set once, ahead of time, the same
+way vector 4's `monitorInterval` was. Reaching the operation at all
+additionally requires the JVM's own JMX remote management to be enabled
+and reachable — a separate, well-documented, independent vulnerability
+category on its own (unauthenticated exposed JMX/RMI ports are a
+long-standing, common real-world misconfiguration, with established tooling
+built around exploiting exactly that). This proof does not stand up a real
+remote RMI listener — it invokes the MBean operation through the local
+platform `MBeanServer`, which is what a remote JMX client's call becomes
+once past the RMI transport; the transport layer is generic JMX/RMI
+behavior, not Log4j-specific, and wasn't what needed testing here. What
+*is* proven directly against real Log4j code: once anything reaches this
+operation with content of its choosing, XInclude fires exactly as
+everywhere else in this investigation.
+
+Also worth noting in passing, found while reading the surrounding code,
+not chased further: the sibling operation `setConfigLocationUri(String)`
+opens the given URL via a plain `new URL(configLocation).openStream()`
+call — it does **not** go through `UrlConnectionFactory`'s protocol
+allow-list (the mechanism that blocks plain `http` by default for vectors
+2 and 4). Whether that's a meaningfully different exposure or simply
+unreachable in the same deployments as `setConfigText()` was not
+investigated.
+
+## Which rules do the surviving vectors (2, 4, and 5) actually reach?
 
 Config control is config control — a vector that delivers one malicious
 `<Configuration>` document delivers whichever payload is inside it,
 regardless of whether that document arrived via an attacker-set env var
-(vector 2) or a takeover of an already-trusted, polled URL (vector 4):
+(vector 2), a takeover of an already-trusted, polled URL (vector 4), or
+content pushed directly through JMX (vector 5):
 
-- **`log4j-xxe` / `log4j-xinclude`**: directly reached — proven by both.
+- **`log4j-xxe` / `log4j-xinclude`**: directly reached — proven by all
+  three.
 - **`log4j-sql-injection`** (`<JDBC tableName>`) and
   **`log4j-script-injection`** (`<Script>`/`<ScriptFile>`): reached the
-  same way by both — these payloads just need to be XML elements inside
-  the same attacker-supplied `<Configuration>` document
-  `XIncludeRemoteConfigProof.java`/`XIncludeWatcherTakeoverProof.java`
+  same way by all three — these payloads just need to be XML elements
+  inside the same attacker-supplied `<Configuration>` document
+  `XIncludeRemoteConfigProof.java`/`XIncludeWatcherTakeoverProof.java`/`XIncludeJmxProof.java`
   already prove can be delivered. Not re-proven separately: the delivery
   mechanism, not the payload string, is what those proofs test.
 - **`log4j-jndi-injection`**: **partially** reached, and this is the one
-  honest exception for both. Either vector gets an attacker's
+  honest exception across all three. Every vector gets an attacker's
   `${jndi:...}` lookup into the config, but `JndiLookup`'s constructor
   separately requires `log4j2.enableJndiLookup=true` (`JndiLookup.java:46`)
   — a JVM system property/environment variable, not config-document
-  content. Config content alone cannot set it (and vector 4 in particular
-  touches *no* property at all), so JNDI needs a **second**,
-  independent condition: either the target environment already opted back
-  into JNDI lookups (organizations that re-enabled it post-Log4Shell for
-  legacy compatibility), or a further way to influence that specific
-  property, neither of which was found or tested here.
+  content. Config content alone cannot set it (vectors 4 and 5 in
+  particular touch *no* config-location property at all), so JNDI needs a
+  **second**, independent condition: either the target environment already
+  opted back into JNDI lookups (organizations that re-enabled it
+  post-Log4Shell for legacy compatibility), or a further way to influence
+  that specific property, neither of which was found or tested here.
 - **`log4j-ssl-hostname-verification`**: outside this discussion entirely
   — the one rule needing none of it. A network man-in-the-middle position
   is sufficient on its own, which is why it remains the strongest "real
@@ -171,16 +226,28 @@ regardless of whether that document arrived via an attacker-set env var
 
 ## What this changes
 
-Two vectors now demonstrably cross the config-control boundary — for
-every config-driven rule except JNDI — without needing "sysadmin access":
-vector 2 (one environment variable/property, attacker-set) and vector 4
-(no attacker-set property at all, just a takeover of a URL the
-application was already, legitimately configured to trust and poll). They
-suit different deployments: vector 2 applies wherever the attacker can
-influence a target JVM's launch environment; vector 4 applies wherever an
-organization already hosts config centrally over HTTP(S) with
-`monitorInterval` set, regardless of who can touch that process's own env
-vars.
+Three vectors now demonstrably cross the config-control boundary — for
+every config-driven rule except JNDI — without needing "sysadmin access,"
+each suited to a different real deployment shape:
+
+- **Vector 2**: one environment variable/property, attacker-set — applies
+  wherever the attacker can influence a target JVM's launch environment
+  (a shared PaaS tenant's own workload, CI/CD env-var injection).
+- **Vector 4**: no attacker-set property at all — applies wherever an
+  organization already hosts config centrally over HTTP(S) with
+  `monitorInterval` set, and that URL's origin can be taken over
+  (subdomain/expired-domain takeover, config-server compromise).
+- **Vector 5**: no property, no URL, no `monitorInterval` — applies
+  wherever Log4j's JMX instrumentation is enabled
+  (`log4j2.disable.jmx=false`, not the default) and the JVM's own JMX
+  remote management is reachable, commonly without authentication in real
+  misconfigured deployments. The attacker's content is pushed directly,
+  not hosted or planted anywhere.
+
+Each has a genuine, separate real-world prerequisite outside Log4j itself
+— env-var-reachability, URL-takeover-ability, or exposed-JMX — rather than
+one being strictly weaker than the others; which one is realistic depends
+entirely on how a given target is actually deployed.
 
 Vector 3 looked smaller than both at first, and the honest result of
 checking it harder — after being challenged directly on whether it was

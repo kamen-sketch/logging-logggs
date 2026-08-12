@@ -173,9 +173,18 @@ its own. If an application already, legitimately loads config from such a
 URL, a takeover of that URL's origin (subdomain takeover, expired-domain
 takeover, config-server compromise — real, independent vulnerability
 categories) delivers a new config with no property, env var, or plugin
-touched at all — proven end to end in
-`XIncludeWatcherTakeoverProof.java`. Full correction, both mechanisms, and
-the ranking of what holds vs. what was retracted is in
+touched at all — proven end to end in `XIncludeWatcherTakeoverProof.java`.
+
+Asked once more for something narrower still — no URL at all, no
+`monitorInterval`, content the attacker controls directly rather than
+infrastructure they have to take over — one more held: Log4j ships a real
+JMX-managed operation, `LoggerContextAdminMBean.setConfigText(String,
+String)`, whose own log line reads `"Remote request to reconfigure from
+config text"` — it runs pushed config text straight through the same
+pipeline, no URL or file at all. Proven via the real MBean on the platform
+`MBeanServer`: `XIncludeJmxProof.java`. Its one real precondition — Log4j's
+JMX instrumentation is off by default — is stated plainly, not glossed
+over. Full ranking of everything that holds vs. what was retracted is in
 `dynamic-proof/real-source/CONFIG_DELIVERY_VECTORS.md`.
 
 ## Not reachable from unauthenticated input — except one — but not a false positive either

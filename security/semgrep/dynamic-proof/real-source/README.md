@@ -159,6 +159,22 @@ proof's own test harness, not just in Log4j: the mock HTTP server needed
 a `Last-Modified` response header, or `monitorSource()` silently declines
 to install any watcher at all (logged plainly as "does not support
 dynamic reconfiguration," found only by reading the actual debug output).
+
+Asked once more, for something needing neither a URL nor `monitorInterval`
+at all: Log4j's own `LoggerContextAdminMBean.setConfigText(String, String)`
+— a real JMX-managed operation
+(`jmx/LoggerContextAdmin.java:201`, its own log message literally `"Remote
+request to reconfigure from config text"`) — runs a pushed string directly
+through the same config pipeline, no URL or file involved at all. Proven
+against the real MBean on the platform `MBeanServer`:
+`XIncludeJmxProof.java`. Its one real precondition — Log4j's JMX
+instrumentation defaults to disabled
+(`JmxUtil.isJmxDisabled()` defaults `true`) — is an operator opt-in, not
+an attacker action, stated plainly rather than glossed over; reaching the
+operation further requires the JVM's own JMX remote management to be
+enabled and reachable, a separate, well-documented vulnerability category
+(unauthenticated exposed JMX/RMI) with its own history outside Log4j.
+
 `CONFIG_DELIVERY_VECTORS.md` has the full ranking of every vector that
 holds and every one retracted, and which other rules each reaches.
 
