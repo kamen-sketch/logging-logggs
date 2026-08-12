@@ -66,4 +66,24 @@ class ScriptInjectionCases {
         // ok: log4j-script-injection
         return engine.eval("return 42;");
     }
+
+    // --- regression: sanitizer breadth ------------------------------------
+
+    /**
+     * An unrelated allow-list check inside the same if-block must NOT
+     * sanitize `scriptText`, which is never itself validated. This probes
+     * whether the sanitizer's "if (<... $ALLOWED.contains(...) ...>) { ... }"
+     * pattern is bound to the tainted value, or wrongly sanitizes anything
+     * physically inside any allow-list-checking if-block regardless of
+     * relation.
+     */
+    public Object evalInsideUnrelatedAllowListCheck(String scriptText, String decoyId)
+            throws ScriptException {
+        if (ALLOWED.contains(decoyId)) {
+            // decoyId was allow-listed here -- scriptText itself was never checked
+            // ruleid: log4j-script-injection
+            return engine.eval(scriptText);
+        }
+        return null;
+    }
 }

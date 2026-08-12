@@ -58,4 +58,23 @@ class UnsafeDeserializationCases {
         ois.setObjectInputFilter(ObjectInputFilter.Config.createFilter("!*"));
         return ois.readObject();
     }
+
+    // --- regression: conditional hardening ---------------------------------
+
+    /**
+     * The filter is applied only when `trusted` is true, but readObject()
+     * always runs -- when trusted is false, this is exactly as vulnerable as
+     * readFromParameter() above. This probes whether "..." in pattern-not
+     * can wrongly match through an untaken if-branch, treating conditional
+     * hardening as if it were unconditional.
+     */
+    public Object readConditionallyFiltered(InputStream in, boolean trusted)
+            throws IOException, ClassNotFoundException {
+        // ruleid: log4j-unsafe-deserialization
+        ObjectInputStream ois = new ObjectInputStream(in);
+        if (trusted) {
+            ois.setObjectInputFilter(ObjectInputFilter.Config.createFilter("java.base/*;!*"));
+        }
+        return ois.readObject();
+    }
 }

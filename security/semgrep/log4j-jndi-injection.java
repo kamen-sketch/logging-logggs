@@ -80,4 +80,22 @@ class JndiInjectionCases {
         // ok: log4j-jndi-injection
         return context.lookup("java:comp/env/jdbc/AppDataSource");
     }
+
+    // --- regression: sanitizer breadth ------------------------------------
+
+    /**
+     * An unrelated getScheme() check inside the same if-block must NOT
+     * sanitize `key`, which is never itself validated. This probes whether
+     * the sanitizer's "if (<... $U.getScheme() ...>) { ... }" pattern is
+     * bound to the tainted value, or wrongly sanitizes anything physically
+     * inside any scheme-checking if-block regardless of relation.
+     */
+    public Object lookupInsideUnrelatedSchemeCheck(String key, URI decoy) throws NamingException {
+        if (decoy.getScheme() != null) {
+            // decoy's scheme was checked here -- key itself was never validated
+            // ruleid: log4j-jndi-injection
+            return context.lookup(key);
+        }
+        return null;
+    }
 }

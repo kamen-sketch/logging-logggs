@@ -67,4 +67,24 @@ class SqlInjectionCases {
         // ok: log4j-sql-injection
         return connection.prepareStatement("insert into logs (ts, msg) values (?, ?)");
     }
+
+    // --- regression: sanitizer breadth ------------------------------------
+
+    /**
+     * An unrelated .matches() check inside the same if-block must NOT
+     * sanitize `tableName`, which is never itself validated. This probes
+     * whether the sanitizer's "if (<... $X.matches(...) ...>) { ... }"
+     * pattern is bound to the tainted value, or wrongly sanitizes anything
+     * physically inside any matches()-checking if-block regardless of
+     * relation.
+     */
+    public PreparedStatement insertInsideUnrelatedMatchesCheck(String tableName, String decoy)
+            throws SQLException {
+        if (decoy.matches("[a-z]+")) {
+            // decoy was validated here -- tableName itself was never checked
+            // ruleid: log4j-sql-injection
+            return connection.prepareStatement("insert into " + tableName + " (ts) values (?)");
+        }
+        return null;
+    }
 }
