@@ -433,11 +433,14 @@ two were not stitched into one single running proof.
   becomes an odd path segment rather than a true absolute-path jump —
   `../` traversal (tested and confirmed) is the real vector, not raw
   absolute-path injection.
-- **Whether other appenders (`RollingFile`, `Syslog`, etc.) used as a
-  Route's nested appender show the same behavior.** Plausible by the same
-  mechanism (all appender attributes go through the same
-  `PluginBuilderAttributeVisitor` substitution), not independently tested
-  here.
+- **Whether other appenders used as a Route's nested appender show the
+  same behavior.** Followed up directly for `HttpAppender`: yes — see
+  `MDC_SSRF_FINDING.md`, which proves the identical mechanism reaches
+  `HttpAppender`'s `url` attribute (a `java.net.URL`-typed field, not even
+  a `String`) and turns it into SSRF, a materially different impact class
+  from this finding's file-write. `RollingFile`, `Syslog`, `Kafka`, `JDBC`,
+  etc. remain untested but plausible by the same generic `PluginBuilder`
+  substitution mechanism.
 - **A Semgrep AST rule for this.** Every other finding in this ruleset has
   a matching `.yaml`/`.java` rule pair scanning *Java source*. This
   finding's dangerous pattern lives in **XML configuration content**

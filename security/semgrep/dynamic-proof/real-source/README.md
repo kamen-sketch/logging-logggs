@@ -38,6 +38,7 @@ is what these proofs check, per rule:
 | `log4j-ssl-hostname-verification` | a real local TLS server presenting a certificate for the WRONG hostname | `SslConfiguration`, `SslSocketManager.createSocket()` (private, reached via reflection) |
 | `log4j-unsafe-deserialization` | nothing — investigated and found not reachable | see `DESERIALIZATION_FINDING.md` |
 | *(no rule yet)* | untrusted `ThreadContext` (MDC) data, through a `RoutingAppender`'s per-event dynamic file-path resolution | `RoutingAppender.append()`/`.createAppender()`, `FileManager` — see `MDC_PATH_TRAVERSAL_FINDING.md` |
+| *(no rule yet)* | the SAME untrusted `ThreadContext` (MDC) mechanism, reaching `HttpAppender`'s `url` attribute instead of a file path — SSRF | `RoutingAppender.append()`/`.createAppender()`, `HttpAppender.Builder`, `PluginBuilder` attribute substitution — see `MDC_SSRF_FINDING.md` |
 
 ## What each proof found, concretely
 
@@ -252,6 +253,42 @@ and whether Java's own tooling is exempt from the extension issue
 an exact `.java` suffix, but `jshell` executes a `.log` file's Java
 statements exactly like the other interpreters). Full detail:
 `MDC_PATH_TRAVERSAL_FINDING.md`.
+
+**SSRF via the same MDC mechanism, a different sink — followed up
+directly on that finding's own "not verified" list rather than left as
+speculation**: `HttpAppender.Builder#url` is declared as a
+`java.net.URL`, not a `String`, but `PluginBuilderAttributeVisitor.visit()`
+(`PluginBuilderAttributeVisitor.java:40,46-47`) runs *every*
+`@PluginBuilderAttribute` — regardless of its declared type — through the
+identical two-step sequence: `substitutor.replace(event, rawValue)` first,
+then `convert(...)` to the target type. `TypeConverters.UrlConverter`
+(`TypeConverters.java:390-395`) does the conversion with a bare `new
+URL(s)`, no scheme or host validation — the same shape as `FileManager`'s
+unchecked `new File(filename)` in the path-traversal finding.
+`MdcSsrfProof.java` proves it against two real local HTTP listeners
+(JDK-bundled `com.sun.net.httpserver.HttpServer`): an operator template
+`url="http://${ctx:target}/report"` plus
+`ThreadContext.put("target", "127.0.0.1:<attacker-port>")` fully
+redirected the outbound request — the attacker's listener received it,
+the operator's actually-intended listener never did. Checked directly
+against the manual, not just the code: `delegating.adoc`'s own
+`[WARNING]` block (confirming `Route` children are evaluated per-event,
+in the log event's context, unescaped) documents this exact substitution
+timing as deliberate — but only warns about `$`-vs-`$$` escaping syntax,
+never about the security implication that the event context this feeds
+from routinely carries request-derived data. The generic "Runtime
+evaluation of attributes" table in `appenders.adoc` doesn't even list
+`HttpAppender`'s `url` or `FileAppender`'s `fileName`, because this
+per-event substitution is exclusive to the separately-documented
+`Route`-child special case, not a general property of either appender.
+Same low bar to reach as the path-traversal finding (an unsanitized
+tenant/org field or trusted-without-cross-checking header reaching
+`ThreadContext`), but a different blast radius: the *process's network
+position* rather than its filesystem permissions — commonly reaching
+cloud metadata endpoints, internal-only admin APIs, or other firewalled
+services a public attacker can't dial directly. Full detail, including
+what wasn't verified (response exfiltration, other non-file appender
+types): `MDC_SSRF_FINDING.md`.
 
 **SQL**: the real `JdbcDatabaseManager.getManager()` — the exact method a
 configured `<JDBC>` appender calls — was driven with a `DROP TABLE` payload

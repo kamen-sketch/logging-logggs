@@ -49,6 +49,7 @@ run_proof XIncludeWatcherTakeoverProof "$HERE/XIncludeWatcherTakeoverProof.java"
 run_proof XIncludeJmxProof "$HERE/XIncludeJmxProof.java"
 run_proof MdcPathTraversalProof "$HERE/MdcPathTraversalProof.java"
 run_proof MdcPathTraversalOverwriteProof "$HERE/MdcPathTraversalOverwriteProof.java"
+run_proof MdcSsrfProof "$HERE/MdcSsrfProof.java"
 run_proof SqlRealSourceProof "$HERE/SqlRealSourceProof.java"
 
 "$HERE/gen-ssl-certs.sh"
