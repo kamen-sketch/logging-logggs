@@ -91,7 +91,7 @@ What `validate.py` **does** verify locally, and passes:
 
 | Rule | CWE | Sink | Severity | Reachable unauthenticated? |
 |---|---|---|---|---|
-| `log4j-jmx-remote-reconfig` | CWE-306 | `MBeanServer.invoke(..., "setConfigText"/"setConfigLocationUri", ...)` | WARNING | Only if JMX remote management is separately exposed without auth — not a Log4j bug, see below |
+| `log4j-jmx-remote-reconfig` | CWE-306 | `MBeanServer.invoke(..., "setConfigText"/"setConfigLocationUri", ...)` | **INFO** (not WARNING — see below) | Only if JMX remote management is separately exposed without auth, invisibly to source review — not a Log4j bug |
 | `log4j-jndi-injection` | CWE-74 | `Context.lookup` | WARNING | No — gated behind explicit opt-in |
 | `log4j-script-injection` | CWE-94 | `ScriptEngine.eval` | WARNING | No — config-controlled input only |
 | `log4j-sql-injection` | CWE-89 | `prepareStatement` / `execute*` | WARNING | No — config-controlled input only |
@@ -104,7 +104,7 @@ What `validate.py` **does** verify locally, and passes:
 fixture cases. Each rule's `metadata.reachability` field carries the
 specific evidence (see "Not reachable from unauthenticated input" below).
 
-## `log4j-jmx-remote-reconfig`: a sink found while asking "is this even a bug?"
+## `log4j-jmx-remote-reconfig`: a sink found while asking "is this even a bug?" — and then downgraded for the same reason
 
 Added after the `log4j-xinclude` config-delivery investigation
 (`dynamic-proof/real-source/CONFIG_DELIVERY_VECTORS.md`) turned up
@@ -114,13 +114,26 @@ caller-supplied content, no URL or file needed. Directly asked whether
 that's actually a Log4j gap or just the feature working as designed: the
 latter — `LoggerContextAdminMBean` is a deliberately documented
 remote-management interface, no different in kind from
-`java.util.logging`'s `LoggingMXBean`. The rule exists anyway because the
-*sink* (arbitrary config injection once reached) is exactly as dangerous
-as `log4j-xxe`/`log4j-xinclude`/`log4j-sql-injection`/
-`log4j-script-injection`'s sinks, and code review benefits from flagging
-"is this reachable by anything other than a fully trusted operator?" —
-the rule's own `metadata.reachability` says so plainly rather than
-implying a code-level bug that isn't there.
+`java.util.logging`'s `LoggingMXBean`.
+
+Shipped first at `WARNING`, matching the other seven rules. Pushed back on
+again, correctly — "but this isn't reachable from an unauthenticated
+attacker" — and that pushback exposed something more than a reachability
+footnote this time: a difference in *kind* from every other rule here, not
+just degree. The other six config-gated rules flag a pattern in Log4j's
+**own source** (or code reusing the same sink) where the matched code
+itself is the problem once reached. This one flags a call to a legitimate,
+intended admin API that can appear in **any** codebase — most plausibly
+legitimate ops/management tooling — where all three things that would
+make the match dangerous (Log4j's JMX instrumentation enabled, the JVM's
+JMX remote management enabled, that access being unauthenticated or
+writable) are JVM launch flags and network configuration, **invisible to
+the source code this rule scans**. A `WARNING` claimed more than a source
+match can actually support. Downgraded to `INFO` — worth surfacing during
+audit ("this codebase calls a powerful remote-reconfiguration API, go
+check how JMX is actually deployed"), not a claim that the matched line is
+a vulnerability by itself. `confidence` moved from `MEDIUM` to `LOW` to
+match: a match says a call exists, not that anything is wrong.
 
 Modeled on `MBeanServerConnection.invoke($OBJNAME, "setConfigText", ...)`
 by operation-name string, not a typed method call on
