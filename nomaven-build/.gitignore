@@ -1,0 +1,6 @@
+out/
+logs/
+demo/classes/
+demo/logs/
+*.err
+*.log
