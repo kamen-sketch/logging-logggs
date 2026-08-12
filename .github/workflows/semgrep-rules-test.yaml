@@ -51,7 +51,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install semgrep
-        run: pip install semgrep
+        run: pip install semgrep pyyaml
 
       - name: semgrep --version
         run: semgrep --version
