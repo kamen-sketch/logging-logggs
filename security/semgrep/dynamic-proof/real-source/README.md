@@ -85,9 +85,19 @@ tested directly rather than trusted from documentation. The only
 mitigation that worked in this session's testing was not enabling
 XInclude at all. Same trust boundary as XXE, **not** unauthenticated remote
 input — see `XINCLUDE_FINDING.md` in this directory for the full
-prerequisite/impact writeup (including why it's a marginal escalation, not
-an initial foothold, and why `monitorInterval` is a real amplifier once the
-config-write prerequisite holds).
+prerequisite/impact writeup, including a correction: the read is **not**
+blind. `XIncludeExfilProof.java` drives the real startup path
+(`Configurator.initialize()`) with a config where a `<Property>` sourced
+via `<xi:include>` is referenced as `${leak}` in a real `File` appender's
+`fileName` — the secret file's contents came back out as part of a real
+output file's name on disk, through log4j's own Properties +
+attribute-substitution mechanism, no second bug needed. A network appender
+pointed at attacker infrastructure would exfiltrate the same content
+off-host (not verified here — no outbound network in this sandbox — but
+the substitution step is identical). Why this still stays MEDIUM: it's a
+marginal escalation for an attacker who already has config-write access,
+not an initial foothold, and `monitorInterval` is a real amplifier once
+that prerequisite holds.
 
 **SQL**: the real `JdbcDatabaseManager.getManager()` — the exact method a
 configured `<JDBC>` appender calls — was driven with a `DROP TABLE` payload

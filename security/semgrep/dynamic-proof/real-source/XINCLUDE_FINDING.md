@@ -63,21 +63,52 @@ Plausible but **not** verified in this sandbox (no external network):
 
 - SSRF via `href="http://internal/..."` when the config is parsed.
 
-Why this is MEDIUM, not critical — stated honestly:
+**Correction, proven wrong by testing rather than left as an assumption**:
+an earlier version of this note claimed the read had "no built-in
+exfiltration channel" — that the file's contents landed in the config DOM
+and stayed there, consumed only internally. That was checked directly
+against real code (`XIncludeExfilProof.java` in this directory) and turned
+out to be **false**. The chain is:
 
-1. **No built-in exfiltration channel.** The included file lands in the DOM and
-   is consumed internally by log4j as configuration structure; its contents
-   are not returned to the attacker by this mechanism itself. The read
-   primitive is real, but leaking it back out needs a separate channel (e.g.
-   the attacker also controlling where that DOM content ends up being used —
-   a `<Property>` value later interpolated into a log pattern the attacker can
-   read — which is a further, non-guaranteed step, not something
-   `setXIncludeAware(true)` hands the attacker automatically).
-2. **An attacker who can already write the log4j config usually has significant
+1. `<Properties><Property name="leak"><xi:include href="file://..."
+   parse="text"/></Property></Properties>` — the file's contents become the
+   text content of the `Property` element (`XmlConfiguration`'s node
+   construction sets a node's value from its element text,
+   `node.setValue(text)`), so they become `Property.getValue()`.
+2. `PropertiesPlugin.configureSubstitutor()` feeds every `<Properties>`
+   entry into a `PropertiesLookup`, wired into the config's
+   `Interpolator` — this is exactly the machinery behind ordinary
+   `${sys:...}`/`${env:...}` substitution, not a bypass of it.
+3. **Every** plugin attribute goes through that same substitutor
+   (`PluginBuilderAttributeVisitor`/`PluginAttributeVisitor` call
+   `substitutor.replace(event, rawValue)` on every `@PluginAttribute`
+   value) — so `${leak}` resolves anywhere in the config an attacker
+   who already controls that config chooses to put it: a `<File
+   fileName="...${leak}...">`, a `<Socket host="...">`/`<Http url="...">`
+   pointed at attacker infrastructure, or a `PatternLayout pattern`.
+
+Proven end to end (`XIncludeExfilProof.java`): a real `Configurator.initialize()`
+load of a config using exactly this pattern — `<Property name="leak">`
+sourcing a local secret file via `<xi:include>`, referenced as
+`${leak}` in a real `FileAppender`'s `fileName` — produced a real output
+file on disk whose *name* contained the secret file's contents verbatim,
+through log4j's own documented Properties + attribute-substitution
+mechanism. No second bug, no custom plugin. A network appender
+(`Socket`/`Syslog`/`Http`) pointed at attacker-controlled infrastructure
+instead of a local `File` appender would exfiltrate the same content
+off-host the same way — not verified in this sandbox (no outbound network
+access), but the substitution step proven here is identical regardless of
+which appender attribute consumes `${leak}`.
+
+Why this is MEDIUM, not critical, despite the read not being blind — stated
+honestly:
+
+1. **An attacker who can already write the log4j config usually has significant
    access already** (filesystem write, or control of JVM properties). From
-   there, arbitrary file read is a marginal escalation, not the initial
-   foothold.
-3. **Amplifier:** log4j auto-reconfigures on `monitorInterval`
+   there, arbitrary file read plus exfiltration is a marginal escalation, not
+   the initial foothold — the prerequisite doesn't change just because the
+   read is no longer blind.
+2. **Amplifier:** log4j auto-reconfigures on `monitorInterval`
    (`XmlConfiguration.java:124-130`, `initializeWatchers`), so a config the
    attacker can rewrite is re-parsed automatically without a restart — raising
    impact *if* prerequisite (1) holds, since the attacker doesn't need to wait
@@ -86,6 +117,11 @@ Why this is MEDIUM, not critical — stated honestly:
 ## Conclusion
 
 A real, empirically-confirmed hardening gap: XInclude slips past every XXE
-protection already in place. Its severity is bounded by the config-file trust
-boundary and the absence of a direct exfiltration path — correctly classified
-as missing-hardening MEDIUM, not an untrusted-input RCE like Log4Shell.
+protection already in place, and — contrary to this note's own earlier,
+untested assumption — the file it reads is not stuck inside the parser: it
+can surface as a real, attacker-visible artifact using nothing but log4j's
+own Properties and attribute-substitution features. Its severity is still
+bounded by the config-file trust boundary, not by any limit on where the
+read content can end up — correctly classified as missing-hardening MEDIUM
+(config-write prerequisite, not a remote unauthenticated vector), not an
+untrusted-input RCE like Log4Shell.

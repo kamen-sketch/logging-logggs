@@ -33,14 +33,19 @@ rules:
         javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, often assumed to be
         a blanket XML-safety switch, does NOT block it either -- confirmed
         empirically, not from documentation. The only confirmed fix in this
-        session's testing was not enabling XInclude at all. Why this stays
-        MEDIUM rather than critical (see XINCLUDE_FINDING.md for the full
-        writeup): the read has no built-in exfiltration channel -- the
-        included content lands in the config DOM, consumed internally, not
-        handed back to the attacker by this mechanism itself; an attacker
-        who can already write/redirect the config file usually has
-        significant access already, so this is a marginal escalation, not
-        an initial foothold; and monitorInterval's auto-reconfigure is a
+        session's testing was not enabling XInclude at all. The read is NOT
+        blind, confirmed by driving the real startup path
+        (dynamic-proof/real-source/XIncludeExfilProof.java,
+        Configurator.initialize()): a <Property> sourced via <xi:include>
+        resolves anywhere ${name} is used in the config -- e.g. a File
+        appender's fileName, or a Socket/Syslog/Http appender's
+        host/url pointed at attacker infrastructure -- via log4j's own
+        Properties + attribute-substitution machinery, no second bug or
+        custom plugin required. Why this stays MEDIUM rather than critical
+        (see XINCLUDE_FINDING.md for the full writeup): an attacker who can
+        already write/redirect the config file usually has significant
+        access already, so read-plus-exfiltration is a marginal escalation,
+        not an initial foothold; and monitorInterval's auto-reconfigure is a
         real amplifier once that prerequisite holds, since a rewritten
         config takes effect without a restart.
     message: >-

@@ -127,9 +127,15 @@ boundary as `log4j-xxe`, re-verified line-by-line against
 `ConfigurationSource.fromUri` accept an attacker-redirectable path/URL, but
 someone still has to control what that path points to). See
 `dynamic-proof/real-source/XINCLUDE_FINDING.md` for the full prerequisite
-and impact writeup, including why this stays MEDIUM: no built-in
-exfiltration channel back to the attacker, an attacker who can already
-write the config usually already has significant access, and
+and impact writeup — including a correction found by testing the follow-up
+question directly instead of assuming an answer: the file read is **not**
+blind. `XIncludeExfilProof.java` proves a `<Property>` sourced via
+`<xi:include>` resolves anywhere `${name}` is used in the config (a `File`
+appender's `fileName`, or a network appender's host/url) through log4j's
+own Properties + attribute-substitution mechanism — a real output file's
+name came back containing the secret verbatim. It still stays MEDIUM: an
+attacker who can already write the config usually already has significant
+access, so this is a marginal escalation, not an initial foothold, and
 `monitorInterval` auto-reconfigure is a real amplifier once that
 prerequisite holds.
 
