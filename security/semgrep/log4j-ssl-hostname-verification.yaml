@@ -4,7 +4,7 @@
 rules:
   - id: log4j-ssl-hostname-verification
     languages: [java]
-    severity: ERROR
+    severity: WARNING
     metadata:
       cwe: "CWE-297: Improper Validation of Certificate with Host Mismatch"
       category: security
@@ -31,6 +31,37 @@ rules:
         same attribute on HttpAppender defaults to `true`, an inconsistency
         in the same codebase between otherwise-equivalent TLS configuration
         surfaces.
+      impact: >-
+        Confidentiality/integrity of the LOG STREAM only -- an attacker who
+        pulls this off can read or tamper with log records in transit
+        (potentially useful for hiding intrusion evidence from a SIEM), not
+        execute code or compromise the application or its configuration. No
+        path to RCE was found; the deserialization sink this ruleset
+        investigated separately does not exist in current source (see
+        DESERIALIZATION_FINDING.md), so a captured connection has nothing
+        further to exploit through Log4j itself. Severity is WARNING, not
+        ERROR, to reflect that: reachability without an authentication
+        barrier does not by itself imply high severity -- the narrow blast
+        radius here matters as much as the low bar to reach it, and roughly
+        matches the publicly low-rated severity band of CVE-2020-9488 (the
+        closely analogous, previously assessed SmtpAppender case), nowhere
+        near Log4Shell. Likelihood is also bounded: this only matters for a
+        deployment that (a) actually configures SocketAppender/SmtpAppender
+        with SSL/TLS to a REMOTE host, and (b) faces an attacker who both has
+        network position AND can present a certificate the configured
+        truststore accepts.
+      status: >-
+        NOT confirmed as an intentional "won't fix." This session's clone is
+        shallow (no access to upstream issue/PR discussion), so whether
+        changing this default was ever proposed and rejected is unknown. What
+        is verifiable locally: the false default has persisted through four
+        separate SSL-related fixes (2.25.0, 2.25.3 x2, 2.25.4), none of which
+        changed it -- they fixed bugs in how the (still-false-by-default)
+        flag was being read, not the default itself. A plausible, unverified
+        explanation: this project's own policy (BUILDING.adoc) disallows MAJOR
+        (breaking) changes on the 2.x branch, and flipping a security-relevant
+        boolean default is exactly the kind of change that could break
+        existing deployments relying on the current lenient behavior.
     message: >-
       An SSLSocket completes its handshake (startHandshake()) without
       setEndpointIdentificationAlgorithm(...) ever being configured on it.

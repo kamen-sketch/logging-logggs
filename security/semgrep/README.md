@@ -85,7 +85,7 @@ What `validate.py` **does** verify locally, and passes:
 | `log4j-jndi-injection` | CWE-74 | `Context.lookup` | WARNING | No — gated behind explicit opt-in |
 | `log4j-script-injection` | CWE-94 | `ScriptEngine.eval` | WARNING | No — config-controlled input only |
 | `log4j-sql-injection` | CWE-89 | `prepareStatement` / `execute*` | WARNING | No — config-controlled input only |
-| `log4j-ssl-hostname-verification` | CWE-297 | `SSLSocket.startHandshake()` | **ERROR** | **Yes — network MITM, no config access needed** |
+| `log4j-ssl-hostname-verification` | CWE-297 | `SSLSocket.startHandshake()` | WARNING | **Yes** — network MITM, no config access needed, but impact is log-stream confidentiality/integrity only, no RCE (see below) |
 | `log4j-unsafe-deserialization` | CWE-502 | `readObject()` | WARNING | No — sink removed from source entirely |
 | `log4j-xxe` | CWE-611 | `newDocumentBuilder` | WARNING | No — parses the trusted config file itself |
 
@@ -118,31 +118,51 @@ different for the sixth:
 - **Deserialization**: stronger still — the vulnerable component
   (`TcpSocketServer`/`UdpSocketServer`) was removed from this branch's
   source entirely, so there is no sink left to reach at all.
-- **SSL hostname verification — different from the other five**: found
-  while following up on a related, older CVE (CVE-2020-9488, SMTP appender
-  certificate validation) to check nearby code for the same class of bug.
-  `SslConfiguration.verifyHostName` defaults to `false`
-  (documented in `manual/appenders/network.adoc`), and `SslSocketManager`
-  (used by `SocketAppender`, reachable via `SmtpAppender`/Syslog through
-  the same `SslConfiguration`) only enables hostname verification when
-  that flag is explicitly set to `true`. Proven end to end against a real
-  local TLS server presenting a mismatched certificate — see
+- **SSL hostname verification — different from the other five, but not
+  higher severity**: found while following up on a related, older CVE
+  (CVE-2020-9488, SMTP appender certificate validation) to check nearby
+  code for the same class of bug. `SslConfiguration.verifyHostName`
+  defaults to `false` (documented in `manual/appenders/network.adoc`), and
+  `SslSocketManager` (used by `SocketAppender`, reachable via
+  `SmtpAppender`/Syslog through the same `SslConfiguration`) only enables
+  hostname verification when that flag is explicitly set to `true`. Proven
+  end to end against a real local TLS server presenting a mismatched
+  certificate — see
   `dynamic-proof/real-source/SslHostnameVerificationProof.java`. This one
   **is** reachable by an unauthenticated attacker: specifically, a network
   man-in-the-middle positioned between the application and its configured
   log destination, who needs no config access, no authentication, and no
   code execution on the victim at all — just network position (a rogue
-  Wi-Fi AP, a compromised router). `severity` stays `ERROR` for this rule,
-  unlike the other five.
+  Wi-Fi AP, a compromised router).
+
+  Reachability without an authentication barrier does not by itself mean
+  high severity, though — impact matters too. What a successful MITM
+  actually gets here is confidentiality/integrity of the **log stream**:
+  reading or tampering with log records in transit, not code execution or
+  application compromise. No path to RCE was found (the deserialization
+  sink this ruleset investigated separately doesn't exist in current
+  source — see `DESERIALIZATION_FINDING.md` — so a captured connection has
+  nothing further to exploit through Log4j itself). That narrow blast
+  radius roughly matches CVE-2020-9488's own low-rated severity — nowhere
+  near Log4Shell — which is why `severity` here is `WARNING`, the same as
+  the other five, not `ERROR`. See the rule's `metadata.impact` and
+  `metadata.status` for the full reasoning, including an honest note that
+  whether the insecure default was ever explicitly proposed to change and
+  rejected is **not verifiable** from this session (a shallow clone with no
+  access to upstream issue/PR history) — what's verifiable is only that the
+  default has persisted through four separate SSL-related fixes since 2020,
+  none of which touched it.
 
 The common thread among the other five: every one of them requires **control
 over the Log4j configuration** (a materially higher trust boundary than
 "unauthenticated network attacker") or, for deserialization, doesn't exist
 as a live sink at all. `severity` was downgraded from `ERROR` to `WARNING`
-for those five to reflect that (the sixth, SSL hostname verification, kept
-its `ERROR` for the opposite reason), and `log4j-jndi-injection`'s and
+for those five to reflect that, and `log4j-jndi-injection`'s and
 `log4j-unsafe-deserialization`'s `confidence` moved from `HIGH` to `MEDIUM`
-to match the other three, which already accounted for this.
+to match the other three, which already accounted for this. All six rules
+in this ruleset are `WARNING` as of the SSL rule's addition, for two
+different reasons: five for narrow reachability, one for narrow impact
+despite broad reachability.
 
 **Why the other five aren't "false positive," despite not being remotely
 exploitable here**: `dynamic-proof/` (the non-real-source proofs) already established
@@ -251,8 +271,12 @@ sslParameters.setEndpointIdentificationAlgorithm("HTTPS");
 socket.setSSLParameters(sslParameters);
 ```
 
-Unlike the other rules here, its severity was *not* lowered — see "Not
-reachable from unauthenticated input" above for why.
+Its severity ended up `WARNING` like the rest, but for a different reason
+than the other five — it's the one rule here reachable without any
+authentication or config access, yet still not `ERROR`, because impact
+(log-stream confidentiality/integrity, no RCE) turned out to matter as much
+as reachability. See "Not reachable from unauthenticated input" above for
+the full reasoning.
 
 ## Layout
 
