@@ -128,11 +128,8 @@ requirement.
    web-shell payload if the traversal reaches a web-served directory —
    becomes the file's content the moment it's logged.
 6. Impact depends on where the traversal lands and what the process can
-   write: dropping an executable/interpretable file inside a served web
-   root (RCE), writing to `/etc/cron.d/` or a systemd path the process
-   can reach (persistence), appending to `~/.ssh/authorized_keys` for the
-   service account (remote access), or simply corrupting/overwriting
-   other application files the process has write access to.
+   write — see "Does the fixed `.log` suffix actually limit impact?"
+   below: it constrains less than it first appears to.
 
 **Scenario B — a client-supplied header trusted without cross-checking.**
 Some deployments read the routing key from a request header instead of
@@ -155,6 +152,72 @@ operators are told to write for legitimate per-tenant log routing. The
 only thing either scenario needs is one unsanitized string reaching
 `ThreadContext`, which is a normal, everyday thing for logging code to
 do.
+
+## Does the fixed `.log` suffix actually limit impact? Tested, and the answer is largely no
+
+Pushed back on directly: the route template's fixed `.log` suffix
+(`fileName="...${ctx:tenant}.log"`) was treated above as if it mattered —
+implying a webshell needs a `.php`/`.jsp` extension the traversal can't
+produce. That's only true for **extension-based dispatch**: a web server
+deciding whether to execute or serve-as-text by looking at the URL's file
+extension (Apache's `mod_php`/`AddHandler`, a servlet container's
+`<servlet-mapping>` for `.jsp`). It is not true in general, and this was
+checked directly rather than left as an assumption, with the interpreters
+actually installed on this machine:
+
+```
+$ php webshell.log            # content: <?php echo "..."; ?>
+PHP-EXECUTED-DESPITE-DOT-LOG-EXTENSION:4
+
+$ node -e "require('./payload.log')"   # content: console.log(...); module.exports = ...
+NODE-EXECUTED-DESPITE-DOT-LOG-EXTENSION:4
+
+$ node payload.log
+NODE-EXECUTED-DESPITE-DOT-LOG-EXTENSION:4
+
+$ python3 script.log          # content: print(...)
+PYTHON-EXECUTED-DESPITE-DOT-LOG-EXTENSION:4
+
+$ bash cmd.log                 # content: echo $((2+2))
+BASH-EXECUTED-DESPITE-DOT-LOG-EXTENSION:4
+```
+
+Every one of PHP, Node.js (both `require()` and direct CLI invocation),
+Python, and Bash executed `.log` content with zero regard for the
+extension, the moment something invokes an interpreter on that exact
+path. The extension only matters to code that specifically inspects it
+before deciding what to do with the file — and plenty of real code paths
+don't:
+
+- **PHP's `include()`/`require()`** — the same functions, called with the
+  log file's path (e.g. a misguided "view recent activity" feature that
+  builds a path from user/tenant identifiers and includes it), execute
+  `.log` content exactly like the CLI test above. This is not a novel
+  technique: it's the well-known **"log poisoning" LFI-to-RCE** pattern
+  (poison a log file via a header/field the app logs, then trigger a
+  separate Local File Inclusion bug to `include()` it). What this finding
+  changes is that the *placement* half of that classic two-bug chain —
+  normally requiring its own, separate path-traversal/LFI vulnerability
+  on the **read** side — is done by the **same** bug that does the
+  poisoning, via the traversal on the **write** side. One bug instead of
+  two.
+- **Node's `require()` extension fallback** — confirmed above: an
+  unrecognized extension does not stop `require()` from parsing the file
+  as JavaScript.
+- **Any cron/systemd/CI job, or custom directory-watcher, that invokes an
+  interpreter on files by iterating a directory** (`for f in dir/*; do
+  bash "$f"; done`, a supervisor that runs whatever appears in a "jobs"
+  folder) rather than filtering by name pattern first.
+
+What *does* still hold, honestly: reaching a web server's own
+extension-based execution path specifically (an HTTP request causing
+`mod_php`/a JSP servlet container to execute the dropped file *because
+the server's own routing logic looked at its name*) is genuinely blocked
+by the fixed `.log` suffix, unless the traversal target directory's own
+handler configuration is unusually broad. That narrower claim was the
+one worth correcting; the general "the `.log` suffix makes this safe"
+framing was not accurate and has been removed from the impact reasoning
+below.
 
 ## Why this is a materially different, and materially more severe, finding
 

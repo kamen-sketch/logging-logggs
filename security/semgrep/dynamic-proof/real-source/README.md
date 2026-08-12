@@ -235,9 +235,14 @@ real file *outside* the intended logging directory. No config-authoring
 trust, no env var, no JMX, no URL — just ordinary application data
 reaching `ThreadContext`, which is an extremely common, unremarkable
 pattern. Full writeup, including why this is a *write* primitive (not
-read, like `log4j-xxe`/`log4j-xinclude`) and what wasn't verified (absolute-
-path payloads, other appender types as the route target, a matching
-Semgrep rule): `MDC_PATH_TRAVERSAL_FINDING.md`.
+read, like `log4j-xxe`/`log4j-xinclude`), a tested (not assumed) chain
+into the already-proven script-injection RCE via an operator's
+`append="false"` route setting, and a real-machine test showing PHP,
+Node.js, Python, and Bash all execute the resulting `.log` file's content
+with zero regard for its extension the moment anything invokes an
+interpreter on it — the same mechanism behind the well-known "log
+poisoning" LFI-to-RCE technique, except this bug supplies both halves of
+that classic two-bug chain by itself: `MDC_PATH_TRAVERSAL_FINDING.md`.
 
 **SQL**: the real `JdbcDatabaseManager.getManager()` — the exact method a
 configured `<JDBC>` appender calls — was driven with a `DROP TABLE` payload
