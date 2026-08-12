@@ -32,6 +32,36 @@ failures: list[str] = []
 notes: list[str] = []
 
 
+class _DuplicateKeyLoader(yaml.SafeLoader):
+    """PyYAML's SafeLoader silently lets a later key win on duplicates --
+    ruamel.yaml (what Semgrep itself parses rules with) raises instead. A
+    rule with e.g. two `impact:` keys under the same `metadata:` block
+    parses "successfully" here and only breaks in CI, one YAML-parser
+    behavioral difference away from being caught locally. Found the hard
+    way (a real CI failure: ruamel.yaml.constructor.DuplicateKeyError),
+    fixed by matching ruamel's strictness here instead of just moving on."""
+
+
+def _construct_mapping_no_dupes(loader, node, deep=False):
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_DuplicateKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping_no_dupes
+)
+
+
 def fail(msg: str) -> None:
     failures.append(msg)
     print(f"  [FAIL] {msg}")
@@ -55,9 +85,9 @@ if not yaml_files:
 
 for path in yaml_files:
     try:
-        doc = yaml.safe_load(path.read_text())
+        doc = yaml.load(path.read_text(), Loader=_DuplicateKeyLoader)
     except yaml.YAMLError as exc:
-        fail(f"{path.name}: YAML does not parse ({exc.__class__.__name__})")
+        fail(f"{path.name}: YAML does not parse ({exc.__class__.__name__}: {exc})")
         continue
 
     if not isinstance(doc, dict) or "rules" not in doc:

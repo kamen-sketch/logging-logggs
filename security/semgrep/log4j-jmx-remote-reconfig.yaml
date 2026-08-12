@@ -10,11 +10,16 @@
 # Metadata style: cross-referenced against the public Semgrep rules registry
 # (github.com/semgrep/semgrep-rules, java/rmi/security/ in particular --
 # JMX's own transport) for field conventions this ruleset hadn't used yet:
-# a structured `owasp` tag and separate `likelihood`/`impact` enums alongside
-# `confidence`, on top of this ruleset's existing narrative
-# grounding/reachability/impact fields. No existing JMX/MBean rule was found
-# in that registry to model the pattern itself on -- this appears to be a
-# new one, not an adaptation of an existing one.
+# a structured `owasp` tag and separate `likelihood`/`impact_rating` enums
+# alongside `confidence`, on top of this ruleset's existing narrative
+# grounding/reachability/impact fields. `impact_rating` (not `impact`) is
+# deliberate -- this ruleset's own narrative `metadata.impact` field already
+# owns that key; the registry convention's short enum collided with it as a
+# duplicate YAML key on the first CI run (caught by the actual error, not
+# predicted -- ruamel.yaml's DuplicateKeyError, not a silent override) and
+# was renamed rather than dropped, since both are useful. No existing
+# JMX/MBean rule was found in that registry to model the pattern itself on
+# -- this appears to be a new one, not an adaptation of an existing one.
 rules:
   - id: log4j-jmx-remote-reconfig
     languages: [java]
@@ -24,7 +29,7 @@ rules:
       category: security
       confidence: MEDIUM
       likelihood: LOW
-      impact: HIGH
+      impact_rating: HIGH
       owasp:
         - "A07:2021 - Identification and Authentication Failures"
       references:
