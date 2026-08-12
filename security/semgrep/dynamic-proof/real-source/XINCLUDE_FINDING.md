@@ -114,6 +114,72 @@ honestly:
    impact *if* prerequisite (1) holds, since the attacker doesn't need to wait
    for or trigger a restart to have the malicious config take effect.
 
+## Real-world scenario, step by step
+
+Everything above proves the *log4j-side* mechanics against real code. This
+section is different in kind: it's the plausible chain an attacker would
+actually walk, split explicitly into what's proven here vs. what's a
+reasonable assumption about a *separate* bug class this repository doesn't
+contain. Log4j itself never hands an attacker the initial foothold — some
+other, independent weakness has to give them prerequisite (1) or (2) from
+"Real prerequisite" above. What follows is one concrete, common shape for
+that, chosen because it's a textbook bug class (arbitrary file write via
+path traversal), not a contrived one.
+
+**Setup**: a Java web app runs as a service account that can read
+`/opt/app/secrets/db-credentials.properties` (a file the attacker's own,
+separate foothold cannot read directly). The app loads
+`log4j2.xml` from `/opt/app/config/log4j2.xml` with `monitorInterval="30"`
+already set — an ordinary, common config choice for picking up logging
+changes without a restart, unrelated to this bug.
+
+1. **Attacker gets an unrelated, lower-value bug**: a file-upload endpoint
+   with a path-traversal flaw lets them write arbitrary bytes to arbitrary
+   paths the service account can write to — including
+   `/opt/app/config/log4j2.xml`. On its own this primitive is limited: the
+   attacker can already write files, but the *interesting* files
+   (`db-credentials.properties`, cloud instance-metadata caches, etc.) are
+   read-only to them or outside the upload directory's reach. (Verified as
+   real-world-common; not part of this repository — this is the external
+   prerequisite, stated as an assumption, not tested here.)
+2. **Attacker overwrites the config**, not the app: they use the upload bug
+   to plant a `log4j2.xml` containing the `<Properties>`/`<xi:include>`/
+   `${leak}` pattern from `XIncludeExfilProof.java` above, with `href`
+   pointed at `db-credentials.properties` and the destination attribute
+   (a `File` `fileName`, or a `Socket`/`Http` `host`/`url`) pointed at
+   somewhere the attacker *can* reach — a location inside the same upload
+   directory they already read from, or, if the host has outbound network
+   access, a server they control.
+3. **No restart needed**: because `monitorInterval` was already configured
+   (common in production for exactly its intended purpose), Log4j's own
+   watcher thread notices the modified file within the configured interval
+   and reloads it automatically — `initializeWatchers()`,
+   `XmlConfiguration.java:130`. The attacker doesn't need a second bug to
+   trigger a restart or touch the running process at all.
+4. **The reload executes the chain proven above**: `newDocumentBuilder(true)`
+   parses the attacker's config, `<xi:include>` reads
+   `db-credentials.properties` with the *service account's* read
+   permissions (not the attacker's), the content becomes `${leak}`'s value,
+   and the substitutor writes it into the destination attribute the
+   attacker chose in step 2.
+5. **Attacker retrieves it**: either by reading the resulting artifact
+   through the same upload-directory access they already had (step 1's
+   bug, reused — no new capability required), or, if a network appender was
+   used instead, by receiving it on infrastructure they control.
+
+The point of walking it this way: step 1 alone is a low/medium-severity
+file-write bug with a narrow blast radius (the attacker can already write
+whatever they want to that directory). Steps 2-5 — which are exactly what
+`XIncludeExfilProof.java` demonstrates against real Log4j code — are what
+turn it into credential theft, by using the *service account's* file-read
+permissions instead of the attacker's own. That's the concrete shape of
+"marginal escalation" from the severity discussion above: not marginal
+because the outcome is small, but because it depends entirely on a
+prerequisite bug elsewhere carrying most of the initial risk. Log4j's part
+is real and proven; the file-write primitive that gets an attacker to
+`log4j2.xml` in the first place is a plausible, common, but *external* and
+*unverified-in-this-repo* assumption.
+
 ## Conclusion
 
 A real, empirically-confirmed hardening gap: XInclude slips past every XXE

@@ -137,7 +137,11 @@ name came back containing the secret verbatim. It still stays MEDIUM: an
 attacker who can already write the config usually already has significant
 access, so this is a marginal escalation, not an initial foothold, and
 `monitorInterval` auto-reconfigure is a real amplifier once that
-prerequisite holds.
+prerequisite holds. `XINCLUDE_FINDING.md` walks a concrete step-by-step
+scenario for what "marginal escalation" looks like in practice — a
+file-upload path-traversal bug that grants write-but-not-read access to
+`log4j2.xml`, chained through XInclude into reading a secret only the
+service account (not the attacker) could read directly.
 
 ## Not reachable from unauthenticated input — except one — but not a false positive either
 

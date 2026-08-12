@@ -97,7 +97,14 @@ off-host (not verified here — no outbound network in this sandbox — but
 the substitution step is identical). Why this still stays MEDIUM: it's a
 marginal escalation for an attacker who already has config-write access,
 not an initial foothold, and `monitorInterval` is a real amplifier once
-that prerequisite holds.
+that prerequisite holds. `XINCLUDE_FINDING.md` also walks a concrete,
+step-by-step real-world scenario — a file-upload path-traversal bug
+granting write-but-not-read access to `log4j2.xml`, escalated via this
+chain into reading a higher-privilege secret the service account (but not
+the attacker) can read, with `monitorInterval` picking up the change
+without a restart — explicitly separating what's proven against real code
+here from the external, unverified-in-this-repo bug class that gets an
+attacker to the config file in the first place.
 
 **SQL**: the real `JdbcDatabaseManager.getManager()` — the exact method a
 configured `<JDBC>` appender calls — was driven with a `DROP TABLE` payload
