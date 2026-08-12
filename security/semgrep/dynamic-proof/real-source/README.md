@@ -94,17 +94,34 @@ output file's name on disk, through log4j's own Properties +
 attribute-substitution mechanism, no second bug needed. A network appender
 pointed at attacker infrastructure would exfiltrate the same content
 off-host (not verified here — no outbound network in this sandbox — but
-the substitution step is identical). Why this still stays MEDIUM: it's a
-marginal escalation for an attacker who already has config-write access,
-not an initial foothold, and `monitorInterval` is a real amplifier once
-that prerequisite holds. `XINCLUDE_FINDING.md` also walks a concrete,
-step-by-step real-world scenario — a file-upload path-traversal bug
-granting write-but-not-read access to `log4j2.xml`, escalated via this
-chain into reading a higher-privilege secret the service account (but not
-the attacker) can read, with `monitorInterval` picking up the change
-without a restart — explicitly separating what's proven against real code
-here from the external, unverified-in-this-repo bug class that gets an
-attacker to the config file in the first place.
+the substitution step is identical). Why this still stays MEDIUM: reaching it still requires some control over
+the target process's configuration or launch environment, not an
+unauthenticated remote attacker sending ordinary application input.
+
+That prerequisite turned out to be smaller than first assumed, though —
+corrected twice in `XINCLUDE_FINDING.md`, each time by testing an
+assumption instead of keeping it. The first version of the real-world
+scenario assumed an attacker could overwrite `log4j2.xml` on disk; pushed
+back on as unrealistic (most real deployments don't let an attacker write
+to that path without already having far more access than this finding
+needs), it was rechecked against real code instead of defended, and found
+to be avoidable entirely: `XIncludeRemoteConfigProof.java` drives the
+ordinary, no-explicit-source `LogManager`/`ConfigurationFactory` startup
+path and shows that `log4j.configurationFile` — documented as the
+`LOG4J_CONFIGURATION_FILE` environment variable — accepts a URL, resolved
+through `ConfigurationSource.fromUri()`/`UrlConnectionFactory`. No
+filesystem write to the target host is needed at all: an attacker who can
+influence one environment variable passed to a target JVM (a tenant setting
+env vars for their own workload on a shared platform, or CI/CD pipeline env
+var injection — both well-documented real categories) can point it at
+infrastructure they host, and the same `XIncludeExfilProof.java` chain
+fires from there. Also confirmed, not assumed: `UrlConnectionFactory`'s
+default protocol allow-list (`file, https, jar`) genuinely blocks a
+plain-`http` version of this — real log output showed the exact rejection
+(`Protocol http has not been enabled as an allowed protocol`) — so the
+proof demonstrates the mechanism with `http` explicitly re-allowed (an
+operator-level property, not a code change) alongside that negative
+control, rather than glossing over the mitigation that exists.
 
 **SQL**: the real `JdbcDatabaseManager.getManager()` — the exact method a
 configured `<JDBC>` appender calls — was driven with a `DROP TABLE` payload

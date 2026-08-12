@@ -31,12 +31,17 @@ The parsed input is **not** application log data. Tracing the constructor:
 Exploitation requires the attacker to **control the content or location of the
 log4j configuration file**. Concretely, one of:
 
-1. Write access to `log4j2.xml`, or
-2. Control over the `log4j.configurationFile` system property / env var (it can
-   point at a URL or attacker-controlled path — confirmed via
-   `ConfigurationFactory.CONFIGURATION_FILE_PROPERTY` and
-   `ConfigurationSource.fromUri`, which accepts an arbitrary URI including
-   `http(s)://`), or
+1. Control over the `log4j.configurationFile` system property / the
+   documented `LOG4J_CONFIGURATION_FILE` environment variable — it can point
+   at a URL the attacker hosts, not just a local path (confirmed via
+   `ConfigurationFactory.CONFIGURATION_FILE_PROPERTY`,
+   `ConfigurationSource.fromUri`, and proven end to end with no filesystem
+   write involved — see "Real-world scenario" below). This is the
+   prerequisite with the most plausible, common real-world shape and the
+   one this note now leads with.
+2. Write access to `log4j2.xml` itself — plausible in principle, but (see
+   below) a materially higher, less common bar in most real deployments
+   than item 1.
 3. An application that lets a user choose the configuration location.
 
 This is the **same trust boundary as `log4j-xxe`**, and the crucial difference
@@ -116,78 +121,103 @@ honestly:
 
 ## Real-world scenario, step by step
 
-Everything above proves the *log4j-side* mechanics against real code. This
-section is different in kind: it's the plausible chain an attacker would
-actually walk, split explicitly into what's proven here vs. what's a
-reasonable assumption about a *separate* bug class this repository doesn't
-contain. Log4j itself never hands an attacker the initial foothold — some
-other, independent weakness has to give them prerequisite (1) or (2) from
-"Real prerequisite" above. What follows is one concrete, common shape for
-that, chosen because it's a textbook bug class (arbitrary file write via
-path traversal), not a contrived one.
+**Correction, again found by testing the assumption rather than keeping
+it**: an earlier version of this section built the scenario around an
+attacker overwriting `log4j2.xml` on disk via a separate file-upload
+path-traversal bug. That premise was pushed back on, correctly: in most
+real deployments, the path a running app loads `log4j2.xml` from is not
+attacker-writable without the attacker already having the kind of access
+(root, the deploy pipeline, the service account itself) that makes the
+rest of this finding close to moot. Rather than defend that framing, it was
+checked against real code instead — and there's a materially better
+prerequisite already sitting in "Real prerequisite" item 2, now proven end
+to end: **no filesystem write to the target host is needed at all.**
 
-**Setup**: a Java web app runs as a service account that can read
-`/opt/app/secrets/db-credentials.properties` (a file the attacker's own,
-separate foothold cannot read directly). The app loads
-`log4j2.xml` from `/opt/app/config/log4j2.xml` with `monitorInterval="30"`
-already set — an ordinary, common config choice for picking up logging
-changes without a restart, unrelated to this bug.
+`ConfigurationFactory.Factory.getConfiguration()` reads the
+`log4j.configurationFile` property with no explicit source having been
+provided — the ordinary, no-argument startup path every application using
+Log4j goes through. That property is documented
+(`systemproperties/properties-configuration-factory.adoc`) as settable via
+the **`LOG4J_CONFIGURATION_FILE` environment variable**, and its value is
+resolved by `ConfigurationSource.fromUri()`, which hands off to
+`UrlConnectionFactory` for anything that isn't a local file — accepting a
+network URL the attacker hosts themselves. Proven end to end
+(`XIncludeRemoteConfigProof.java`, driven through the real, default,
+no-explicit-source `LogManager`/`ConfigurationFactory` startup path — not a
+shortcut around it):
 
-1. **Attacker gets an unrelated, lower-value bug**: a file-upload endpoint
-   with a path-traversal flaw lets them write arbitrary bytes to arbitrary
-   paths the service account can write to — including
-   `/opt/app/config/log4j2.xml`. On its own this primitive is limited: the
-   attacker can already write files, but the *interesting* files
-   (`db-credentials.properties`, cloud instance-metadata caches, etc.) are
-   read-only to them or outside the upload directory's reach. (Verified as
-   real-world-common; not part of this repository — this is the external
-   prerequisite, stated as an assumption, not tested here.)
-2. **Attacker overwrites the config**, not the app: they use the upload bug
-   to plant a `log4j2.xml` containing the `<Properties>`/`<xi:include>`/
-   `${leak}` pattern from `XIncludeExfilProof.java` above, with `href`
-   pointed at `db-credentials.properties` and the destination attribute
-   (a `File` `fileName`, or a `Socket`/`Http` `host`/`url`) pointed at
-   somewhere the attacker *can* reach — a location inside the same upload
-   directory they already read from, or, if the host has outbound network
-   access, a server they control.
-3. **No restart needed**: because `monitorInterval` was already configured
-   (common in production for exactly its intended purpose), Log4j's own
-   watcher thread notices the modified file within the configured interval
-   and reloads it automatically — `initializeWatchers()`,
-   `XmlConfiguration.java:130`. The attacker doesn't need a second bug to
-   trigger a restart or touch the running process at all.
-4. **The reload executes the chain proven above**: `newDocumentBuilder(true)`
-   parses the attacker's config, `<xi:include>` reads
-   `db-credentials.properties` with the *service account's* read
-   permissions (not the attacker's), the content becomes `${leak}`'s value,
-   and the substitutor writes it into the destination attribute the
-   attacker chose in step 2.
-5. **Attacker retrieves it**: either by reading the resulting artifact
-   through the same upload-directory access they already had (step 1's
-   bug, reused — no new capability required), or, if a network appender was
-   used instead, by receiving it on infrastructure they control.
+- With no override, a plain `http://` config URL was **not** used —
+  confirmed both by the absence of any leaked artifact and, cross-checked
+  with `-Dlog4j2.debug=true`, the exact real log line: `Error accessing
+  http://127.0.0.1:PORT/evil.xml due to Protocol http has not been enabled
+  as an allowed protocol, ignoring.` `UrlConnectionFactory`'s default
+  allow-list is `file, https, jar` (`DEFAULT_ALLOWED_PROTOCOLS`) —
+  plain HTTP is genuinely blocked by default, a real, working mitigation
+  worth crediting rather than glossing over.
+- With `log4j2.Configuration.allowedProtocols` including `http` (an
+  operator-level property override, not a code change — exercised this way
+  only to avoid an orthogonal TLS-trust-store setup; `https`, which
+  requires no such relaxation, is already in the default allow-list and
+  goes through the identical code path once the connection is open), the
+  same config was fetched from a URL a simulated attacker-controlled HTTP
+  server served, and the secret still leaked into a real output file's name
+  on disk — the identical chain `XIncludeExfilProof.java` proved, just
+  reached by URL instead of by local file.
 
-The point of walking it this way: step 1 alone is a low/medium-severity
-file-write bug with a narrow blast radius (the attacker can already write
-whatever they want to that directory). Steps 2-5 — which are exactly what
-`XIncludeExfilProof.java` demonstrates against real Log4j code — are what
-turn it into credential theft, by using the *service account's* file-read
-permissions instead of the attacker's own. That's the concrete shape of
-"marginal escalation" from the severity discussion above: not marginal
-because the outcome is small, but because it depends entirely on a
-prerequisite bug elsewhere carrying most of the initial risk. Log4j's part
-is real and proven; the file-write primitive that gets an attacker to
-`log4j2.xml` in the first place is a plausible, common, but *external* and
-*unverified-in-this-repo* assumption.
+**The scenario this actually supports**: an attacker who can influence the
+value of *one environment variable or JVM property* passed to a target
+process — not read or write anything on that process's filesystem, not
+compromise its service account, just control how it's launched — can point
+`LOG4J_CONFIGURATION_FILE` at infrastructure they host and own outright.
+That bar is real and common in ways "overwrite this specific file on this
+specific host" is not:
+
+1. **Multi-tenant PaaS / container platforms** where a tenant legitimately
+   sets environment variables for *their own* workload (Heroku-style
+   platforms, many internal developer platforms, Kubernetes namespaces a
+   team self-serves). The tenant isn't attacking someone else's process —
+   they're pointing their *own* container's Log4j at a config they host,
+   and the file being read is whatever *that* container can see: a
+   node-level credential, a shared secrets volume, a cloud instance
+   metadata response — things the platform assumed logging configuration
+   couldn't touch.
+2. **CI/CD pipeline env-var injection** — a well-documented real category
+   (e.g. GitHub's own guidance on "pwn request"-style issues): a
+   contributor's PR or a compromised dependency running inside a build/test
+   job sets `LOG4J_CONFIGURATION_FILE` (or the equivalent `-D` flag via
+   `JAVA_TOOL_OPTIONS`, itself a standard JVM-recognized environment
+   variable, not Log4j-specific — visible in this very session's own sandbox
+   output) for that job's JVM, then reads back whatever local secret file
+   the runner has mounted (deploy keys, cloud credentials) through the
+   config-driven read this finding proves, via an appender attribute rather
+   than printing it — the kind of side channel that generic secret-masking
+   in CI log output does not catch.
+
+Neither of these requires "already being a sysadmin," and neither requires
+touching the target's filesystem — only the one thing proven reachable
+here: control of a single property value at process launch. What Log4j's
+part of the chain does with that, once reached, is exactly what
+`XIncludeExfilProof.java` and `XIncludeRemoteConfigProof.java` demonstrate
+against real code. The still-external, still-unverified-in-this-repo part
+is narrower than before: not "an arbitrary-file-write vulnerability," just
+"some influence over one env var passed to the target JVM" — which is
+itself a form of the same "control over configuration" trust boundary this
+whole finding has been honest about from the start, just concretely
+narrowed to its smallest real shape instead of the broadest, least
+plausible one.
 
 ## Conclusion
 
 A real, empirically-confirmed hardening gap: XInclude slips past every XXE
-protection already in place, and — contrary to this note's own earlier,
-untested assumption — the file it reads is not stuck inside the parser: it
-can surface as a real, attacker-visible artifact using nothing but log4j's
-own Properties and attribute-substitution features. Its severity is still
-bounded by the config-file trust boundary, not by any limit on where the
-read content can end up — correctly classified as missing-hardening MEDIUM
-(config-write prerequisite, not a remote unauthenticated vector), not an
-untrusted-input RCE like Log4Shell.
+protection already in place, the file it reads is not stuck inside the
+parser (it can surface as a real, attacker-visible artifact using nothing
+but log4j's own Properties and attribute-substitution features), and —
+corrected twice now by testing instead of assuming — reaching it does not
+require filesystem write access to the target host at all: control over one
+environment variable at process launch is enough. Severity is still bounded
+by that prerequisite, not by any limit on where the read content can end
+up or how directly it's reached — correctly classified as missing-hardening
+MEDIUM (some control over the target process's configuration or launch
+environment required, not a remote unauthenticated vector like Log4Shell),
+but the concrete shape of that prerequisite is now the smallest, most
+plausible one found, not the largest.

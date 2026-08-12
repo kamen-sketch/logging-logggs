@@ -133,15 +133,22 @@ blind. `XIncludeExfilProof.java` proves a `<Property>` sourced via
 `<xi:include>` resolves anywhere `${name}` is used in the config (a `File`
 appender's `fileName`, or a network appender's host/url) through log4j's
 own Properties + attribute-substitution mechanism — a real output file's
-name came back containing the secret verbatim. It still stays MEDIUM: an
-attacker who can already write the config usually already has significant
-access, so this is a marginal escalation, not an initial foothold, and
-`monitorInterval` auto-reconfigure is a real amplifier once that
-prerequisite holds. `XINCLUDE_FINDING.md` walks a concrete step-by-step
-scenario for what "marginal escalation" looks like in practice — a
-file-upload path-traversal bug that grants write-but-not-read access to
-`log4j2.xml`, chained through XInclude into reading a secret only the
-service account (not the attacker) could read directly.
+name came back containing the secret verbatim. It still stays MEDIUM: some control
+over the target process's configuration or launch environment is still
+required, just not an unauthenticated remote attacker. That prerequisite
+turned out smaller than first assumed, though — `XINCLUDE_FINDING.md`
+documents a correction, found by testing rather than defending an
+assumption: an attacker does **not** need filesystem write access to
+`log4j2.xml` at all. `XIncludeRemoteConfigProof.java` proves the ordinary,
+no-explicit-source startup path honors `log4j.configurationFile`
+(documented as the `LOG4J_CONFIGURATION_FILE` environment variable)
+pointing at a URL — so an attacker who can influence just one environment
+variable passed to a target JVM (a tenant on a shared platform setting env
+vars for their own workload, or CI/CD pipeline env-var injection — both
+well-documented real categories) can trigger the same read-and-surface
+chain without touching the target's filesystem. Also confirmed: the
+default protocol allow-list genuinely blocks plain `http` for that fetch —
+a real mitigation, credited rather than glossed over.
 
 ## Not reachable from unauthenticated input — except one — but not a false positive either
 
