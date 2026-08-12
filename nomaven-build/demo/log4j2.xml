@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN" name="NoMavenSmokeTest">
+
+  <Appenders>
+    <Console name="Console" target="SYSTEM_OUT">
+      <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %logger{1.} %X{orderId} - %msg%n"/>
+    </Console>
+
+    <File name="File" fileName="logs/app.log" append="false">
+      <PatternLayout pattern="%d{ISO8601} %-5level [%t] %logger - %msg%n%throwable{short}"/>
+    </File>
+
+    <RollingFile name="Rolling" fileName="logs/rolling.log"
+                 filePattern="logs/rolling-%i.log.gz">
+      <PatternLayout pattern="%m%n"/>
+      <Policies>
+        <SizeBasedTriggeringPolicy size="1 KB"/>
+      </Policies>
+      <DefaultRolloverStrategy max="3"/>
+    </RollingFile>
+  </Appenders>
+
+  <Loggers>
+    <!-- exercises level inheritance + additivity -->
+    <Logger name="com.example.noisy" level="warn" additivity="false">
+      <AppenderRef ref="Console"/>
+    </Logger>
+
+    <Logger name="com.example.rolling" level="info" additivity="false">
+      <AppenderRef ref="Rolling"/>
+    </Logger>
+
+    <Root level="debug">
+      <AppenderRef ref="Console"/>
+      <AppenderRef ref="File"/>
+    </Root>
+  </Loggers>
+
+</Configuration>

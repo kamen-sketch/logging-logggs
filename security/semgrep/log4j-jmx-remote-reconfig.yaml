@@ -1,0 +1,124 @@
+# Not taint mode: unlike the JNDI/SQL/Script rules, there is no interesting
+# source-to-sink FLOW to model here -- calling either of these two operations
+# at all, with content the caller does not fully control, is the finding.
+# Matches JMX invoke() calls by operation-name string literal rather than a
+# typed method call, because that is how a real JMX client (including this
+# ruleset's own dynamic-proof/real-source/XIncludeJmxProof.java) actually
+# reaches LoggerContextAdminMBean -- through MBeanServerConnection.invoke(),
+# not a typed proxy, so a typed-call pattern would miss the realistic case.
+#
+# Metadata style: cross-referenced against the public Semgrep rules registry
+# (github.com/semgrep/semgrep-rules, java/rmi/security/ in particular --
+# JMX's own transport) for field conventions this ruleset hadn't used yet:
+# a structured `owasp` tag and separate `likelihood`/`impact_rating` enums
+# alongside `confidence`, on top of this ruleset's existing narrative
+# grounding/reachability/impact fields. `impact_rating` (not `impact`) is
+# deliberate -- this ruleset's own narrative `metadata.impact` field already
+# owns that key; the registry convention's short enum collided with it as a
+# duplicate YAML key on the first CI run (caught by the actual error, not
+# predicted -- ruamel.yaml's DuplicateKeyError, not a silent override) and
+# was renamed rather than dropped, since both are useful. No existing
+# JMX/MBean rule was found in that registry to model the pattern itself on
+# -- this appears to be a new one, not an adaptation of an existing one.
+#
+# CORRECTION, severity: initially WARNING, same as the other 7 rules. Pushed
+# back on directly -- "but this isn't reachable from an unauthenticated
+# attacker" -- and that pushback exposed a real difference in KIND, not just
+# degree, from the other 7. Every other rule flags a pattern in Log4j's OWN
+# source (or code reusing the same sink) where the code itself is the
+# problem once reached. This one flags a call to a legitimate, intended
+# admin API that can appear in ANY codebase (most plausibly a legitimate
+# internal ops/management tool), where all three things that would make it
+# dangerous -- Log4j's JMX instrumentation enabled, the JVM's JMX remote
+# management enabled, and that access being unauthenticated or writable --
+# are invisible to source-code review entirely; they are JVM launch flags
+# and network configuration, not anything an AST pattern can see. A WARNING
+# here would overstate what a source-code match can actually tell a
+# reviewer. Downgraded to INFO: worth surfacing during audit ("this
+# codebase calls a powerful remote-reconfiguration API -- go check how JMX
+# is actually deployed"), not a claim that the matched code is a
+# vulnerability by itself.
+rules:
+  - id: log4j-jmx-remote-reconfig
+    languages: [java]
+    severity: INFO
+    metadata:
+      cwe: "CWE-306: Missing Authentication for Critical Function"
+      category: security
+      confidence: LOW
+      likelihood: LOW
+      impact_rating: HIGH
+      owasp:
+        - "A07:2021 - Identification and Authentication Failures"
+      references:
+        - dynamic-proof/real-source/CONFIG_DELIVERY_VECTORS.md
+        - dynamic-proof/real-source/XIncludeJmxProof.java
+      grounding: log4j-core/src/main/java/org/apache/logging/log4j/core/jmx/LoggerContextAdmin.java:124,201; log4j-api/src/main/java/org/apache/logging/log4j/util/internal/JmxUtil.java (referenced from log4j-core/.../jmx/internal)
+      reachability: >-
+        NOT reachable from an unauthenticated attacker through this rule's
+        matched code alone -- and, unlike this ruleset's other six
+        config-control-gated rules, that gate is entirely INVISIBLE to
+        source-code review, which is why this rule is INFO rather than
+        WARNING. LoggerContextAdminMBean is a deliberately designed,
+        documented remote-management interface (like java.util.logging's
+        LoggingMXBean), and setConfigText()/setConfigLocationUri()
+        reconfiguring a running LoggerContext from caller-supplied content
+        is that feature working exactly as intended -- not a bug in Log4j's
+        own logic. Three things, none visible in the Java source this rule
+        scans, all have to be true for the matched code to matter: Log4j's
+        JMX instrumentation must be explicitly enabled (DISABLED by
+        default -- JmxUtil.isJmxDisabled() defaults true,
+        log4j2.disable.jmx must be set to "false"), the JVM's own JMX
+        remote management must be enabled and network-reachable (also not
+        default), and that access must be unauthenticated or granted a
+        writable role. All three are JVM launch flags and network
+        configuration -- an AST match of this pattern says nothing about
+        any of them. Confirmed end to end that the CODE-LEVEL mechanism is
+        real once those three hold: XIncludeJmxProof.java drives
+        setConfigText() through the real platform MBeanServer and
+        reconfigures with an XInclude payload that reads and exfiltrates a
+        local file. NOT independently verified in this session: whether a
+        JMX `readonly`-role principal (jmxremote.access) can invoke this at
+        all -- standard JMX access controllers are understood to reserve
+        invoke() for `readwrite` roles, which would narrow real exposure
+        further still.
+      impact: >-
+        IF all three external preconditions above hold, this is a
+        config-content-control primitive with the same blast radius as any
+        other rule in this ruleset that assumes config control
+        (log4j-xinclude, log4j-xxe, log4j-sql-injection,
+        log4j-script-injection all become reachable through a config
+        pushed this way) -- proven concretely via XInclude: arbitrary
+        local file read that can be made to surface in an attacker-visible
+        artifact (see XIncludeExfilProof.java), not merely consumed
+        internally. log4j-jndi-injection is the one exception: it
+        additionally requires log4j2.enableJndiLookup=true, a separate
+        property this mechanism cannot itself set. But a match on its own
+        proves none of those three preconditions -- most real matches are
+        expected to be legitimate ops/management tooling, not attacker
+        code, which is the whole reason this is an audit signal (INFO)
+        rather than a claim that the matched line is dangerous (WARNING).
+    message: >-
+      A JMX operation named "setConfigText" or "setConfigLocationUri" is
+      invoked -- these are LoggerContextAdminMBean's real, documented
+      remote-reconfiguration operations
+      (org.apache.logging.log4j.core.jmx.LoggerContextAdmin), which parse
+      and apply arbitrary caller-supplied configuration content or URI to a
+      running LoggerContext with no additional validation of their own.
+      This is very likely legitimate code (an ops/management tool using
+      Log4j's own documented remote-reconfiguration API as intended) --
+      this finding is informational, not a claim that this line is
+      dangerous. It becomes worth acting on only if ALL of the following
+      also hold, none of which this scan can see: Log4j's JMX
+      instrumentation is enabled (log4j2.disable.jmx=false, not the
+      default), the JVM's own JMX remote management is enabled and
+      network-reachable, and that access is unauthenticated or has a
+      writable role. If so, treat this as equivalent to arbitrary Log4j
+      config injection -- including the log4j-xinclude/log4j-xxe/
+      log4j-sql-injection/log4j-script-injection sinks in this same
+      ruleset.
+    patterns:
+      - pattern-either:
+          - pattern: $MBS.invoke($OBJNAME, "setConfigText", ...)
+          - pattern: $MBS.invoke($OBJNAME, "setConfigLocationUri", ...)
+          - pattern: System.setProperty("log4j2.disable.jmx", "false")

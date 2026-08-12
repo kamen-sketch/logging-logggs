@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fixtures for log4j-mdc-path-traversal. Config-shape only, mirroring
+     dynamic-proof/real-source/MdcPathTraversalProof.java's real config --
+     not meant to be a complete, runnable log4j2.xml. -->
+<Configuration status="error">
+  <Appenders>
+
+    <!-- vulnerable: RoutingAppender's per-event Route builds a File
+         appender whose fileName reads a live, per-event ThreadContext
+         (MDC) value with no validation -- proven end to end against real
+         Log4j classes in MdcPathTraversalProof.java. -->
+    <Routing name="PerTenantVulnerable">
+      <Routes pattern="$${ctx:tenant}">
+        <!-- ruleid: log4j-mdc-path-traversal -->
+        <Route>
+          <File name="Route-${ctx:tenant}" fileName="/var/log/myapp/tenants/${ctx:tenant}.log">
+            <PatternLayout pattern="%msg%n"/>
+          </File>
+        </Route>
+      </Routes>
+    </Routing>
+
+    <!-- ok: the escaped $${ctx:...} form is NOT live-substituted inside a
+         Route child -- manual/appenders/delegating.adoc's own [WARNING]
+         documents Route children as evaluated unescaped, so a $$-escaped
+         value is left as inert literal text instead. Confirmed the hard
+         way: this session's own first proof draft made exactly this
+         mistake (copying the escaping convention from Routes' own
+         `pattern` attribute) and the debug log showed the literal,
+         unresolved string instead of a live substitution. -->
+    <Routing name="PerTenantEscaped">
+      <Routes pattern="$${ctx:tenant}">
+        <Route>
+          <!-- ok: log4j-mdc-path-traversal -->
+          <File name="Route-static" fileName="/var/log/myapp/tenants/$${ctx:tenant}.log">
+            <PatternLayout pattern="%msg%n"/>
+          </File>
+        </Route>
+      </Routes>
+    </Routing>
+
+    <!-- ok: ${ctx:...} used OUTSIDE any Route, in an ordinary static File
+         appender. Resolved once at config-load time against the GLOBAL
+         context (manual/lookups.adoc), reading whatever is in the
+         config-parsing thread's ThreadContext at that one moment -- not a
+         live, per-request snapshot. Not the vulnerable mechanism, even
+         though the ${ctx:...} substring is present. -->
+    <!-- ok: log4j-mdc-path-traversal -->
+    <File name="StaticWithCtx" fileName="/var/log/myapp/${ctx:build_id}.log">
+      <PatternLayout pattern="%msg%n"/>
+    </File>
+
+    <!-- ok: Route by reference to an existing, statically-configured
+         appender -- no nested appender definition at all, nothing for
+         this mechanism to reach. -->
+    <Routing name="PerTenantByRef">
+      <Routes pattern="$${ctx:tenant}">
+        <!-- ok: log4j-mdc-path-traversal -->
+        <Route ref="StaticWithCtx"/>
+      </Routes>
+    </Routing>
+
+  </Appenders>
+  <Loggers>
+    <Root level="INFO">
+      <AppenderRef ref="PerTenantVulnerable"/>
+    </Root>
+  </Loggers>
+</Configuration>

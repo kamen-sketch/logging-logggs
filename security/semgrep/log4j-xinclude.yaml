@@ -1,0 +1,63 @@
+# Not taint mode: like log4j-xxe, this is a missing-hardening / dangerous-
+# feature-enabled flaw, not a source-to-sink flow.
+rules:
+  - id: log4j-xinclude
+    languages: [java]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-611: Improper Restriction of XML External Entity Reference"
+      category: security
+      confidence: MEDIUM
+      grounding: log4j-core/src/main/java/org/apache/logging/log4j/core/config/xml/XmlConfiguration.java:175-184,213-230
+      reachability: >-
+        Same threat model as log4j-xxe: the only caller in this codebase,
+        XmlConfiguration.newDocumentBuilder(true), parses the log4j2.xml
+        configuration file itself, loaded from a trusted classpath resource
+        or configured path -- not remote, unauthenticated input. Exploiting
+        it requires control over the configuration file content. Confirmed
+        end to end against the real method (see
+        dynamic-proof/real-source/XIncludeProbe.java): a real local file's
+        contents were read via a crafted <xi:include> in a config-shaped
+        document.
+      impact: >-
+        <xi:include href="..." parse="text"/> reads its target as raw text --
+        it does not need to be well-formed XML -- a direct arbitrary local
+        file read primitive once triggered. An http(s):// href can also
+        reach network resources (SSRF), though this was not verified in this
+        session's sandbox (no external network access). Two things this
+        finding specifically disproves by testing rather than assuming: (1)
+        XmlConfiguration's DTD/external-entity hardening
+        (disableDtdProcessing -- setExpandEntityReferences(false), the
+        external-general-entities SAX feature, etc.) does NOT restrict
+        XInclude at all; it is a completely separate JAXP mechanism. (2)
+        javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, often assumed to be
+        a blanket XML-safety switch, does NOT block it either -- confirmed
+        empirically, not from documentation. The only confirmed fix in this
+        session's testing was not enabling XInclude at all. The read is NOT
+        blind, confirmed by driving the real startup path
+        (dynamic-proof/real-source/XIncludeExfilProof.java,
+        Configurator.initialize()): a <Property> sourced via <xi:include>
+        resolves anywhere ${name} is used in the config -- e.g. a File
+        appender's fileName, or a Socket/Syslog/Http appender's
+        host/url pointed at attacker infrastructure -- via log4j's own
+        Properties + attribute-substitution machinery, no second bug or
+        custom plugin required. Why this stays MEDIUM rather than critical
+        (see XINCLUDE_FINDING.md for the full writeup): an attacker who can
+        already write/redirect the config file usually has significant
+        access already, so read-plus-exfiltration is a marginal escalation,
+        not an initial foothold; and monitorInterval's auto-reconfigure is a
+        real amplifier once that prerequisite holds, since a rewritten
+        config takes effect without a restart.
+    message: >-
+      DocumentBuilderFactory.setXIncludeAware(true) is enabled. XInclude
+      (<xi:include href="...">) is a separate mechanism from DTD-based
+      external entities: disabling DTD processing does not restrict it, and
+      neither does XMLConstants.FEATURE_SECURE_PROCESSING (verified, not
+      assumed). A crafted <xi:include href="file:///etc/passwd"
+      parse="text"/> reads arbitrary local files as raw text; an http(s)://
+      href can also cause SSRF. If XInclude support is not required, leave it
+      disabled -- the JAXP default. If it is required, restrict the base
+      URI/scheme via a custom XMLResolver/LSResourceResolver; no
+      factory-level feature was found to do this.
+
+    pattern: $FACTORY.setXIncludeAware(true);

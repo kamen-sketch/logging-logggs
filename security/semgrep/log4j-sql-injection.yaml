@@ -1,0 +1,62 @@
+rules:
+  - id: log4j-sql-injection
+    mode: taint
+    languages: [java]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      category: security
+      confidence: MEDIUM
+      grounding: log4j-core/src/main/java/org/apache/logging/log4j/core/appender/db/jdbc/JdbcDatabaseManager.java:125,728
+      reachability: >-
+        NOT reachable from unauthenticated remote input, confirmed by
+        driving the real JdbcDatabaseManager.getManager() (see
+        dynamic-proof/real-source/SqlRealSourceProof.java). tableName is a
+        Log4j CONFIGURATION value (the <JDBC> appender's tableName
+        attribute), authored by whoever controls the configuration file --
+        not data that flows in from a log message or any other remote,
+        unauthenticated input. severity/confidence reflect that narrower
+        attack surface; the rule is kept for regressions and for other code
+        reusing this concatenation pattern without the same trust boundary.
+    message: >-
+      A dynamically built SQL string reaches a JDBC statement. JdbcDatabaseManager
+      concatenates the configured table and column names into its INSERT
+      ("insert into " + tableName + " ("), so anyone who can supply the Log4j
+      configuration can inject SQL. Identifiers cannot be bound as parameters --
+      validate them against a strict pattern or quote them with
+      DatabaseMetaData.getIdentifierQuoteString() before concatenating.
+
+    pattern-sources:
+      - patterns:
+          - pattern-inside: |
+              $RET $METHOD(..., String $NAME, ...) { ... }
+          - pattern: $NAME
+      - pattern: $CONFIG.getTableName()
+      - pattern: $CONFIG.getColumnName()
+      - pattern: $EVENT.getMessage().getFormattedMessage()
+
+    pattern-sanitizers:
+      # Bound to the SAME name reaching the sink: $NAME.matches(...) checks
+      # the value directly, so an unrelated matches() call on some OTHER
+      # variable physically nearby does not match -- confirmed by an
+      # adversarial regression case (see insertInsideUnrelatedMatchesCheck
+      # in the fixture) that an earlier, unbound version of this sanitizer
+      # (a bare "if (<... $X.matches(...) ...>) { ... }") wrongly suppressed.
+      - patterns:
+          - pattern-inside: |
+              if (<... $NAME.matches("...") ...>) { ... }
+          - pattern: $NAME
+      # Bound parameters are safe by construction.
+      - pattern: (java.sql.PreparedStatement $S).setString($I, $V)
+
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: (java.sql.Connection $C).prepareStatement($SQL, ...)
+              - pattern: (java.sql.Connection $C).prepareStatement($SQL)
+              - pattern: (java.sql.Connection $C).prepareCall($SQL)
+              - pattern: (java.sql.Statement $S).execute($SQL)
+              - pattern: (java.sql.Statement $S).executeQuery($SQL)
+              - pattern: (java.sql.Statement $S).executeUpdate($SQL)
+              - pattern: (java.sql.Statement $S).addBatch($SQL)
+          - focus-metavariable: $SQL

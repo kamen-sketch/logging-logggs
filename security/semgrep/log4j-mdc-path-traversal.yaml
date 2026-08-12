@@ -1,0 +1,127 @@
+# Different rule SHAPE from every other rule in this ruleset, deliberately:
+# the dangerous pattern here lives in XML configuration content, not Java
+# source, so there is no AST to match against with `languages: [java]`.
+# `pattern-regex` under `languages: [generic]` is used instead -- the
+# pragmatic, fully-deterministic choice given this sandbox cannot install
+# Semgrep to test pattern-matching behavior directly (see run-tests.sh);
+# a raw regex's behavior can be reasoned about without the engine, whereas
+# Semgrep's generic/aliengrep tokenizer's handling of `...` INSIDE a quoted
+# attribute value is not something this session could verify empirically
+# before pushing. Verified in CI (semgrep-rules-test.yaml), the same way
+# every other rule and fixture in this ruleset was.
+#
+# Not taint mode: like log4j-jmx-remote-reconfig, there is no interesting
+# source-to-sink FLOW for Semgrep to model across a single XML file -- the
+# untrusted data (ThreadContext/MDC) is set in application Java code
+# entirely separate from this config file; the config file alone cannot
+# show that flow. What the config file CAN show, and what this rule
+# matches, is the precondition that makes the flow dangerous once it
+# happens: a `fileName` attribute that reads a live per-event `${ctx:...}`
+# lookup, immediately inside a `RoutingAppender`'s `<Route>` element.
+#
+# Why scoped specifically to being the immediate child of `<Route>`, not
+# just "any fileName containing ${ctx:...} anywhere in the file": outside a
+# `<Route>`, an ordinary static appender's attributes are resolved ONCE at
+# config-load time, against the GLOBAL context (manual/lookups.adoc's
+# `global-context` evaluation) -- `${ctx:key}` there reads whatever is in
+# the config-parsing thread's ThreadContext at that one moment, not a live
+# snapshot from arbitrary future requests. `RoutingAppender.append()` /
+# `.createAppender()` (log4j-core/.../appender/routing/RoutingAppender.java:
+# 296-300,365-382) is what makes a Route's CHILD appender node different:
+# built fresh, per LogEvent, against that event's own context data
+# (manual/appenders/delegating.adoc's own [WARNING] at the `Route` element
+# confirms this is deliberate: "Lookups in the children of the Route
+# component are not evaluated at configuration time... evaluated in the
+# context of the current event"). That per-event, per-request evaluation is
+# the entire reason this is exploitable at all -- proven end to end against
+# real Log4j classes in dynamic-proof/real-source/MdcPathTraversalProof.java
+# and MdcPathTraversalOverwriteProof.java. A rule that also fired on the
+# config-load-time-only case would overclaim what a source match can show,
+# the same mistake log4j-jmx-remote-reconfig's first WARNING severity made.
+#
+# The escaped `$${ctx:...}` form (correct syntax OUTSIDE a Route, but a
+# real bug found and fixed in this session's own proof construction when
+# copied INSIDE one) is deliberately excluded via a negative lookbehind:
+# inside a Route child, Log4j does not strip that escape the way it does
+# for config-time-evaluated attributes, so it is left as inert, literal
+# text -- not a live substitution. Confirmed the hard way: the first draft
+# of MdcPathTraversalProof.java used exactly this escaping by mistake,
+# copying the convention from `Routes`' own `pattern` attribute (which DOES
+# need it), and the debug log showed `${ctx:tenant}` sitting unresolved in
+# the file name instead of being substituted.
+rules:
+  - id: log4j-mdc-path-traversal
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include:
+        - "*.xml"
+    metadata:
+      cwe: "CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"
+      category: security
+      confidence: MEDIUM
+      references:
+        - dynamic-proof/real-source/MDC_PATH_TRAVERSAL_FINDING.md
+        - dynamic-proof/real-source/MdcPathTraversalProof.java
+        - dynamic-proof/real-source/MdcPathTraversalOverwriteProof.java
+      grounding: >-
+        log4j-core/src/main/java/org/apache/logging/log4j/core/appender/routing/RoutingAppender.java:296-300,365-382
+        (per-event nested-appender construction);
+        log4j-core/src/main/java/org/apache/logging/log4j/core/appender/FileManager.java:226,265
+        (plain `new File(filename)`, no canonicalization or containment
+        check anywhere in the chain)
+      reachability: >-
+        Needs NO config-authoring trust at all -- unlike every Java-source
+        rule in this ruleset, which needs the attacker to influence what
+        Log4j parses as configuration. The config here is exactly what
+        operators are documented to write for legitimate per-tenant/per-key
+        log routing (mirrors this repository's own
+        log4j-core-test/src/test/resources/log4j-routing-purge.xml test
+        fixture). The only thing an attacker needs is one unvalidated
+        string reaching `ThreadContext` (MDC) before a log event fires --
+        an unrestricted self-service org/tenant-slug field, or a
+        client-supplied header trusted without cross-checking against the
+        authenticated session (the same trust-boundary-confusion class as
+        `X-Forwarded-For` spoofing). Proven end to end:
+        MdcPathTraversalProof.java drove the real RoutingAppender/
+        FileManager classes with `ThreadContext.put("tenant", "../marker")`
+        and produced a real file outside the intended logging directory.
+      impact: >-
+        A write, not a read, primitive -- and the file's content is exactly
+        whatever PatternLayout renders (typically including the same
+        request's other logged data), so the SAME bug controls both the
+        destination path and the payload, no second vulnerability needed.
+        Whether the fixed suffix a route template re-adds (e.g. ".log")
+        limits impact was tested directly, not assumed: PHP `include()`/
+        `require()`, Node's `require()` fallback, and direct interpreter
+        invocation (php/node/python3/bash) all execute ".log" content with
+        zero regard for the extension the moment something invokes an
+        interpreter on that exact path -- the classic "log poisoning"
+        LFI-to-RCE pattern, except this bug supplies both halves (poison +
+        placement) by itself. Chains into this ruleset's own
+        log4j-script-injection RCE conditionally: MdcPathTraversalOverwriteProof.java
+        confirms a pre-existing target file (e.g. Log4j's own config) is
+        CLEANLY overwritten only when the route's `append` attribute is
+        `false` (not FileAppender's default); under the `append=true`
+        default, the same primitive still corrupts the target file's
+        well-formedness rather than swapping it in cleanly.
+    message: >-
+      A `fileName` attribute inside a RoutingAppender `<Route>`'s nested
+      appender definition reads an unescaped `${ctx:...}` (ThreadContext/MDC)
+      lookup. Unlike a static appender's attributes -- resolved once at
+      config-load time -- a Route's child appender is rebuilt fresh on
+      EVERY log event, against that event's own context data
+      (RoutingAppender.createAppender(), confirmed in
+      dynamic-proof/real-source/MdcPathTraversalProof.java). If the MDC key
+      this reads (here, "ctx:tenant") can ever contain attacker-influenced
+      data -- a request header, an unrestricted tenant/org identifier, a JWT
+      claim -- a value like "../../../var/www/html/pwn" escapes the
+      intended logging directory entirely, and the escaped file's content
+      is whatever gets logged next: a write primitive at an attacker-chosen
+      path with attacker-chosen content, not merely a read. Validate/allowlist
+      any value that reaches ThreadContext and is used this way (a safe
+      charset for tenant/org identifiers is a common, sufficient fix), or
+      avoid deriving Route file paths from MDC data that isn't fully
+      trusted. See MDC_PATH_TRAVERSAL_FINDING.md for the full real-world
+      scenario, verified impact, and conditional RCE chain.
+    pattern-regex: '(?s)<Route\b[^>]*>\s*<[A-Za-z][A-Za-z0-9]*\b[^>]*\bfileName\s*=\s*"[^"]*(?<!\$)\$\{ctx:[^}]*\}[^"]*"[^>]*>'

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fixtures for log4j-mdc-ssrf. Config-shape only, mirroring
+     dynamic-proof/real-source/MdcSsrfProof.java's real config -- not
+     meant to be a complete, runnable log4j2.xml. -->
+<Configuration status="error">
+  <Appenders>
+
+    <!-- vulnerable: RoutingAppender's per-event Route builds an Http
+         appender whose url reads a live, per-event ThreadContext (MDC)
+         value with no validation -- proven end to end against real Log4j
+         classes (and two real local HTTP listeners) in MdcSsrfProof.java. -->
+    <Routing name="PerTenantVulnerable">
+      <Routes pattern="$${ctx:tenant}">
+        <!-- ruleid: log4j-mdc-ssrf -->
+        <Route>
+          <Http name="Route-${ctx:tenant}" url="http://${ctx:target}/report">
+            <PatternLayout pattern="%msg%n"/>
+          </Http>
+        </Route>
+      </Routes>
+    </Routing>
+
+    <!-- ok: the escaped $${ctx:...} form is NOT live-substituted inside a
+         Route child, for the same documented reason as
+         log4j-mdc-path-traversal.xml -- left as inert literal text. -->
+    <Routing name="PerTenantEscaped">
+      <Routes pattern="$${ctx:tenant}">
+        <Route>
+          <!-- ok: log4j-mdc-ssrf -->
+          <Http name="Route-static" url="http://metrics.internal:9000/$${ctx:target}">
+            <PatternLayout pattern="%msg%n"/>
+          </Http>
+        </Route>
+      </Routes>
+    </Routing>
+
+    <!-- ok: ${ctx:...} used OUTSIDE any Route, in an ordinary static Http
+         appender. Resolved once at config-load time against the GLOBAL
+         context, not a live per-request snapshot -- not the vulnerable
+         mechanism, even though the ${ctx:...} substring is present. -->
+    <!-- ok: log4j-mdc-ssrf -->
+    <Http name="StaticWithCtx" url="http://metrics.internal:9000/${ctx:build_id}">
+      <PatternLayout pattern="%msg%n"/>
+    </Http>
+
+    <!-- ok: Route by reference to an existing, statically-configured
+         appender -- no nested appender definition at all, nothing for
+         this mechanism to reach. -->
+    <Routing name="PerTenantByRef">
+      <Routes pattern="$${ctx:tenant}">
+        <!-- ok: log4j-mdc-ssrf -->
+        <Route ref="StaticWithCtx"/>
+      </Routes>
+    </Routing>
+
+  </Appenders>
+  <Loggers>
+    <Root level="INFO">
+      <AppenderRef ref="PerTenantVulnerable"/>
+    </Root>
+  </Loggers>
+</Configuration>

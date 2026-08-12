@@ -1,0 +1,90 @@
+rules:
+  - id: log4j-jndi-injection
+    mode: taint
+    languages: [java]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-74: Improper Neutralization of Special Elements in Output Used by a Downstream Component ('Injection')"
+      category: security
+      confidence: MEDIUM
+      references:
+        - https://nvd.nist.gov/vuln/detail/CVE-2021-44228
+      grounding: log4j-core/src/main/java/org/apache/logging/log4j/core/net/JndiManager.java:244
+      reachability: >-
+        NOT reachable from unauthenticated remote input in this codebase's
+        current source, confirmed by driving the real compiled classes (see
+        dynamic-proof/real-source/JndiRealSourceProof.java). Three layers
+        block the original Log4Shell vector specifically: log message
+        content is never interpolated at all (MessagePatternConverter,
+        unconditional), JndiLookup is excluded from Interpolator's dispatch
+        map by default, and JndiLookup's own constructor refuses to run
+        without an operator explicitly setting
+        log4j2.enableJndiLookup=true. Reaching this sink at all requires
+        either that explicit opt-in plus authoring a ${jndi:...} lookup
+        directly into the Log4j configuration, or reusing this same
+        unguarded pattern in different code -- i.e. it requires control over
+        configuration or source, not an unauthenticated network request.
+        severity/confidence reflect that narrower attack surface; the rule
+        is kept for regressions and for other code reusing this sink
+        without the same guards. The config-delivery half of that
+        prerequisite (getting a ${jndi:...} lookup into a Configuration
+        document at all) turns out to need neither CI/CD access nor a
+        filesystem write to the host app -- see
+        dynamic-proof/real-source/CONFIG_DELIVERY_VECTORS.md, which also
+        states plainly why this is the one rule those vectors only
+        partially reach: log4j2.enableJndiLookup=true is a separate JVM
+        property/env var that config-document content alone cannot set.
+    message: >-
+      Attacker-controlled data reaches a JNDI Context.lookup() without a URI
+      scheme check. A JNDI name such as "ldap://attacker/a" makes the JVM fetch
+      and deserialize a remote object (Log4Shell, CVE-2021-44228). Validate the
+      scheme before the lookup, as JndiManager.lookup() does: reject any URI
+      whose getScheme() is neither null nor "java".
+
+    pattern-sources:
+      # A String parameter of a lookup-style method: this is how a format-string
+      # substitution key (${jndi:...}) enters the lookup implementation.
+      - patterns:
+          - pattern-inside: |
+              $RET $METHOD(..., String $KEY, ...) { ... }
+          - pattern: $KEY
+      # Data taken straight off a log event / message.
+      - pattern: $EVENT.getMessage().getFormattedMessage()
+      - pattern: $MSG.getFormattedMessage()
+      - pattern: org.apache.logging.log4j.ThreadContext.get($K)
+
+    pattern-sanitizers:
+      # Bound to the SAME name reaching the sink, via the URI built from it:
+      # new URI($NAME) ... if (<... $U.getScheme() ...>). An unrelated
+      # getScheme() check on some OTHER variable physically nearby does not
+      # match, because $NAME must be the exact value used to construct $U --
+      # confirmed by an adversarial regression case (see
+      # lookupInsideUnrelatedSchemeCheck in the fixture) that an earlier,
+      # unbound version of this sanitizer wrongly suppressed.
+      - patterns:
+          - pattern-inside: |
+              $U = new java.net.URI($NAME);
+              ...
+              if (<... $U.getScheme() ...>) { ... }
+          - pattern: $NAME
+      # Bound to the SAME name via allow-list membership: $ALLOWED.contains($NAME).
+      - patterns:
+          - pattern-inside: |
+              if (<... $ALLOWED.contains($NAME) ...>) { ... }
+          - pattern: $NAME
+
+    pattern-sinks:
+      # Both the interface type and InitialContext/DirContext variants are
+      # listed explicitly: Semgrep's lightweight Java type inference does not
+      # always resolve that InitialContext/DirContext implement Context
+      # without a full classpath, so a receiver declared as the concrete type
+      # needs its own pattern or the sink is silently missed.
+      - patterns:
+          - pattern-either:
+              - pattern: (javax.naming.Context $CTX).lookup($NAME)
+              - pattern: (javax.naming.InitialContext $CTX).lookup($NAME)
+              - pattern: (javax.naming.directory.DirContext $CTX).lookup($NAME)
+              - pattern: (javax.naming.Context $CTX).lookupLink($NAME)
+              - pattern: (javax.naming.InitialContext $CTX).lookupLink($NAME)
+              - pattern: (javax.naming.directory.DirContext $CTX).lookupLink($NAME)
+          - focus-metavariable: $NAME

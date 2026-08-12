@@ -1,0 +1,118 @@
+# Same shape and same reasoning as log4j-mdc-path-traversal.yaml -- read
+# that file's header first. This rule exists because the identical
+# RoutingAppender mechanism was checked against a DIFFERENT sink type and
+# found to reach it too: HttpAppender.Builder#url (HttpAppender.java:48-50)
+# is a `java.net.URL`-typed @PluginBuilderAttribute, not a String, but
+# PluginBuilderAttributeVisitor.visit() (PluginBuilderAttributeVisitor.java:
+# 40,46-47) substitutes-then-converts EVERY plugin attribute identically
+# regardless of its declared Java type, and TypeConverters.UrlConverter
+# (TypeConverters.java:390-395) converts with a bare `new URL(s)` -- no
+# scheme or host allow-list, the same shape as FileManager's unchecked
+# `new File(filename)`. Proven end to end against two real local HTTP
+# listeners in dynamic-proof/real-source/MdcSsrfProof.java.
+#
+# `pattern-regex` / `languages: [generic]` for the same reason as the
+# path-traversal rule: this sandbox cannot install Semgrep to verify
+# generic-mode AST/tokenizer matching behavior directly, so a
+# fully-deterministic raw regex was used instead of relying on unverified
+# ellipsis-inside-a-quoted-string semantics. Verified in CI, not here.
+#
+# Not taint mode, for the same reason as log4j-mdc-path-traversal: the
+# untrusted data (ThreadContext/MDC) is set in application Java code
+# entirely separate from this XML file: no single-file flow for Semgrep to
+# model. This rule matches the precondition the config file CAN show: a
+# `url` attribute reading a live, per-event `${ctx:...}` lookup, immediately
+# inside a RoutingAppender `<Route>` element -- scoped to the Route-child
+# case only, for the same reason as the path-traversal rule: outside a
+# `<Route>`, `${ctx:...}` is resolved once at config-load time against the
+# GLOBAL context (manual/lookups.adoc), not a live per-request snapshot,
+# and firing there would overclaim what a source match can actually show.
+#
+# The `url` attribute name is not scoped to `<Http>` specifically -- the
+# underlying mechanism (every PluginBuilderAttribute goes through the same
+# substitute-then-convert path, confirmed by reading PluginBuilderAttributeVisitor
+# directly, not assumed) is generic to whatever appender type is nested in
+# the Route, so a plain attribute-name match is the more accurate scope,
+# not an artificially narrower one tied to a single appender's tag name.
+#
+# The escaped `$${ctx:...}` form is excluded the same way as the
+# path-traversal rule, via the same negative lookbehind and the same
+# manual.adoc-confirmed reasoning: Route children are evaluated unescaped,
+# so a `$$`-escaped value is left as inert literal text instead of being
+# live-substituted.
+rules:
+  - id: log4j-mdc-ssrf
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include:
+        - "*.xml"
+    metadata:
+      cwe: "CWE-918: Server-Side Request Forgery (SSRF)"
+      category: security
+      confidence: MEDIUM
+      references:
+        - dynamic-proof/real-source/MDC_SSRF_FINDING.md
+        - dynamic-proof/real-source/MDC_PATH_TRAVERSAL_FINDING.md
+        - dynamic-proof/real-source/MdcSsrfProof.java
+      grounding: >-
+        log4j-core/src/main/java/org/apache/logging/log4j/core/appender/routing/RoutingAppender.java:296-300,365-382
+        (per-event nested-appender construction, identical to the
+        path-traversal finding);
+        log4j-core/src/main/java/org/apache/logging/log4j/core/appender/HttpAppender.java:48-50
+        (`url` declared as `java.net.URL`, a `@PluginBuilderAttribute`);
+        log4j-core/src/main/java/org/apache/logging/log4j/core/config/plugins/visitors/PluginBuilderAttributeVisitor.java:40,46-47
+        (substitutes the raw attribute string against the event's context,
+        THEN converts to the declared type -- type does not exempt an
+        attribute from this);
+        log4j-core/src/main/java/org/apache/logging/log4j/core/config/plugins/convert/TypeConverters.java:390-395
+        (`UrlConverter.convert()` is a bare `new URL(s)`, no validation)
+      reachability: >-
+        Same low bar as log4j-mdc-path-traversal: no config-authoring
+        trust needed, just one unvalidated value (an org/tenant field, or a
+        client-supplied header trusted without cross-checking) reaching
+        `ThreadContext` before a log event fires. Proven end to end against
+        two real local HTTP listeners (JDK-bundled
+        com.sun.net.httpserver.HttpServer, not a mock):
+        MdcSsrfProof.java sets `ThreadContext.put("target",
+        "127.0.0.1:<attacker-port>")` against an operator template
+        `url="http://${ctx:target}/report"` and the attacker-chosen
+        listener received the request while the operator's actually-
+        intended listener never did -- a full redirect, not a request
+        that merely also reaches an extra host.
+      impact: >-
+        A network-reachability primitive, not a filesystem-write one: the
+        blast radius is whatever the APPLICATION'S OWN network position can
+        reach, not what it can write to disk -- commonly larger in real
+        deployments (cloud instance metadata endpoints, internal-only admin
+        APIs never meant to be reachable from outside, other firewalled
+        internal services, localhost-bound management ports on the same
+        host). No file-extension or downstream-execution question applies
+        here at all, unlike the path-traversal finding: the outbound HTTP
+        request itself is the impact, with no second bug needed to act on
+        it. Not verified in this session: whether the response from the
+        redirected request is ever surfaced anywhere attacker-observable
+        (if not, this is a "blind" SSRF -- still capable of side effects on
+        the internal target, but not direct response exfiltration). See
+        MDC_SSRF_FINDING.md for the full writeup.
+    message: >-
+      A `url` attribute inside a RoutingAppender `<Route>`'s nested
+      appender definition reads an unescaped `${ctx:...}` (ThreadContext/MDC)
+      lookup. Like fileName in a Route child (see log4j-mdc-path-traversal),
+      this attribute is rebuilt fresh on EVERY log event against that
+      event's own context data, not resolved once at config-load time --
+      confirmed for HttpAppender specifically in
+      dynamic-proof/real-source/MdcSsrfProof.java, even though its `url`
+      field is typed java.net.URL, not String: Log4j's plugin-attribute
+      substitution runs before type conversion, for every attribute
+      regardless of type. If the MDC key this reads can ever contain
+      attacker-influenced data, the attacker controls the destination of an
+      outbound HTTP request the application itself makes -- Server-Side
+      Request Forgery, capable of reaching cloud metadata endpoints,
+      internal admin APIs, or other services the app's network position can
+      reach but a public attacker cannot dial directly. Validate/allowlist
+      any value that reaches ThreadContext and is used this way, or avoid
+      deriving Route request destinations from MDC data that isn't fully
+      trusted. See MDC_SSRF_FINDING.md for the full real-world scenario and
+      verified impact.
+    pattern-regex: '(?s)<Route\b[^>]*>\s*<[A-Za-z][A-Za-z0-9]*\b[^>]*\burl\s*=\s*"[^"]*(?<!\$)\$\{ctx:[^}]*\}[^"]*"[^>]*>'
