@@ -1,0 +1,64 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to you under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# Verifies security/semgrep/*.yaml against their fixtures with `semgrep --test`.
+#
+# This exists because the rules were authored in a sandbox whose egress proxy
+# blocks both PyPI and npm ("Host not in allowlist"), so `pip install semgrep`
+# could not be run there. GitHub-hosted runners are not behind that proxy, so
+# this workflow is the first place these rules are actually exercised against
+# the Semgrep engine rather than just schema-validated.
+name: semgrep-rules-test
+
+on:
+  push:
+    branches:
+      - "claude/**"
+    paths:
+      - "security/semgrep/**"
+      - ".github/workflows/semgrep-rules-test.yaml"
+  pull_request:
+    paths:
+      - "security/semgrep/**"
+      - ".github/workflows/semgrep-rules-test.yaml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install semgrep
+        run: pip install semgrep
+
+      - name: semgrep --version
+        run: semgrep --version
+
+      - name: Local schema checks (validate.py)
+        run: python3 security/semgrep/validate.py
+
+      - name: semgrep --test
+        working-directory: security/semgrep
+        run: semgrep --test --config . .
