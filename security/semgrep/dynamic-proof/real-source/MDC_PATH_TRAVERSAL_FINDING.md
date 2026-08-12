@@ -186,6 +186,61 @@ do.
    how `RoutingAppender` is documented to be used, with no unusual opt-in
    required. This raises the bar for likelihood, not lowers it.
 
+## Chaining to the RCE this session already proved elsewhere — tested, and the answer is "conditionally," not "always"
+
+Asked directly whether this chains into the genuine RCE
+`log4j-script-injection` already demonstrated
+(`ScriptRealSourceProof.java`, a real `ScriptEngine.eval()` executing
+attacker-supplied script text). The obvious chain: use this write
+primitive to overwrite Log4j's *own* config file with a malicious
+`<Script>`-based document, then whatever reloads that file (`monitorInterval`,
+or the next process restart) hands the attacker the already-proven script
+sink — turning a foothold that needed no config-authoring trust at all
+into full config control, the trust boundary every other finding in this
+ruleset assumed the attacker already had.
+
+That chain has exactly one link that isn't automatic, and it was tested
+rather than assumed either way: `FileAppender`'s `append` attribute
+**defaults to `true`** (`FileAppender.java:63`). `MdcPathTraversalOverwriteProof.java`
+targets a pre-existing "victim" file (a well-formed `<Configuration>`
+document, standing in for a real `log4j2.xml`) through the identical
+traversal mechanism, under both settings:
+
+- **`append="true"` (the default)**: the victim's original, valid XML is
+  **not removed** — the attacker's content lands appended after it,
+  producing a document with text after the closing `</Configuration>`
+  tag. That is not well-formed XML; a config reload against this file
+  fails to parse cleanly rather than swapping in the attacker's intended
+  replacement. Real impact, but integrity/DoS (a config that no longer
+  loads, or a process that keeps running its last-good configuration
+  until restart), not a clean RCE handoff.
+- **`append="false"` (an operator's explicit, plausible-but-not-default
+  choice)**: the victim's original content is **completely gone**,
+  replaced by exactly what the attacker logged — a clean, fully
+  attacker-controlled document. This is precisely the condition the
+  script-injection chain needs.
+
+So: **yes, this chains into the already-proven script-injection RCE — but
+only when the operator's route template sets `append="false"`** (or the
+traversal happens to target a path that doesn't exist yet, sidestepping
+the append-vs-overwrite question entirely by creating the malicious file
+fresh). Under the FileAppender default, the same primitive still causes
+real damage (breaking whatever existing file it targets) but does not, on
+its own, hand the attacker a clean malicious-config swap. Neither
+condition was assumed — both were driven against real code and the actual
+resulting file content was read back and compared, not inferred.
+
+Not re-executed here as a single, further, end-to-end proof: actually
+reloading the overwritten file as a live `Configuration` and confirming
+`ScriptEngine.eval()` fires from it. That reload step and the script sink
+itself are what `ScriptRealSourceProof.java` already establishes
+independently and thoroughly (real `ScriptManager` discovery via JSR-223
+`ServiceLoader`, real script execution producing a real file) — combining
+"this proof's clean-overwrite capability, under `append=\"false\"`" with
+"that proof's already-demonstrated script sink" is a grounded conclusion
+from two independently verified facts, not an unverified leap, but the
+two were not stitched into one single running proof.
+
 ## What was not verified
 
 - **Absolute-path escape.** Not tested: whether a value like
