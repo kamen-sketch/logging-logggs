@@ -57,17 +57,26 @@ Host not in allowlist: registry.npmjs.org
 
 GitHub-hosted Actions runners aren't behind that proxy, so
 `.github/workflows/semgrep-rules-test.yaml` runs it there instead. Current
-status, from the actual log content (not just the green checkmark):
+status, from the actual log content (not just the green checkmark) —
+this ruleset has grown to 8 rules since this section was last updated,
+re-confirmed after each addition rather than left stale:
 
 ```
-5/5: ✓ All tests passed
+8/8: ✓ All tests passed
 ```
 
-That took several rounds: the workflow's first runs failed on real bugs —
-a missing `pyyaml` dependency, three pattern/annotation mismatches, and (in
-the adversarial-fixture round below) three sanitizers that were unbound to
-the variable actually reaching the sink. Run `./run-tests.sh` locally where
-Semgrep is installable to reproduce; it picks up Semgrep automatically.
+That took several rounds across the ruleset's growth, not just once — the
+workflow's first runs failed on real bugs: a missing `pyyaml` dependency,
+three pattern/annotation mismatches, three sanitizers unbound to the
+variable actually reaching the sink (the adversarial-fixture round below),
+and, most recently, adding `log4j-jmx-remote-reconfig` broke twice before
+passing — first a duplicate `metadata.impact` YAML key (a
+`ruamel.yaml.DuplicateKeyError` PyYAML's own `safe_load` doesn't catch,
+now fixed by tightening `validate.py` to match ruamel's strictness), then
+a fully-qualified `java.lang.System.setProperty(...)` pattern that didn't
+match the unqualified form real code (and this rule's own fixture) actually
+uses. Run `./run-tests.sh` locally where Semgrep is installable to
+reproduce; it picks up Semgrep automatically.
 
 What `validate.py` **does** verify locally, and passes:
 
