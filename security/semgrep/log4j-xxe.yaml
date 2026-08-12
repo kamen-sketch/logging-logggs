@@ -1,0 +1,42 @@
+# Not taint mode: XXE is a missing-hardening flaw, so the rule matches the
+# construction of an unhardened parser rather than a source-to-sink flow.
+rules:
+  - id: log4j-xxe
+    languages: [java]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-611: Improper Restriction of XML External Entity Reference"
+      category: security
+      confidence: MEDIUM
+      grounding: log4j-core/src/main/java/org/apache/logging/log4j/core/config/xml/XmlConfiguration.java:175
+    message: >-
+      A DocumentBuilderFactory is used without disabling DTD and external-entity
+      processing, so a configuration file can read local files or reach the
+      network. XmlConfiguration.newDocumentBuilder() shows the expected
+      hardening: setExpandEntityReferences(false) plus setFeature() for
+      external-general-entities, external-parameter-entities and
+      nonvalidating/load-external-dtd.
+
+    patterns:
+      - pattern: |
+          $F = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+          ...
+          $F.newDocumentBuilder();
+      - pattern-not: |
+          $F = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+          ...
+          $F.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+          ...
+          $F.newDocumentBuilder();
+      - pattern-not: |
+          $F = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+          ...
+          $F.setExpandEntityReferences(false);
+          ...
+          $F.newDocumentBuilder();
+      - pattern-not: |
+          $F = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+          ...
+          $F.setFeature("http://xml.org/sax/features/external-general-entities", false);
+          ...
+          $F.newDocumentBuilder();

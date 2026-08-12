@@ -1,0 +1,40 @@
+rules:
+  - id: log4j-script-injection
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+      category: security
+      confidence: MEDIUM
+      grounding: log4j-core/src/main/java/org/apache/logging/log4j/core/script/ScriptManager.java:260
+    message: >-
+      Attacker-controlled data reaches ScriptEngine.eval(). A JSR-223 engine
+      executes arbitrary code with the privileges of the JVM, so script text
+      must come from trusted configuration only -- never from a log event,
+      a ThreadContext value, or a request attribute.
+
+    pattern-sources:
+      - pattern: $EVENT.getMessage().getFormattedMessage()
+      - pattern: $MSG.getFormattedMessage()
+      - pattern: org.apache.logging.log4j.ThreadContext.get($K)
+      - pattern: $EVENT.getContextData().getValue($K)
+      - patterns:
+          - pattern-inside: |
+              $RET $METHOD(..., String $INPUT, ...) { ... }
+          - pattern: $INPUT
+
+    pattern-sanitizers:
+      # Script text resolved from a fixed registry of configured scripts.
+      - pattern: $REGISTRY.get($K)
+      - pattern: |
+          if (<... $ALLOWED.contains($X) ...>) { ... }
+
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: (javax.script.ScriptEngine $E).eval($SCRIPT, ...)
+              - pattern: (javax.script.ScriptEngine $E).eval($SCRIPT)
+              - pattern: (javax.script.CompiledScript $C).eval($SCRIPT, ...)
+              - pattern: (javax.script.Compilable $E).compile($SCRIPT)
+          - focus-metavariable: $SCRIPT

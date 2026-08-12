@@ -1,0 +1,48 @@
+rules:
+  - id: log4j-jndi-injection
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-74: Improper Neutralization of Special Elements in Output Used by a Downstream Component ('Injection')"
+      category: security
+      confidence: HIGH
+      references:
+        - https://nvd.nist.gov/vuln/detail/CVE-2021-44228
+      grounding: log4j-core/src/main/java/org/apache/logging/log4j/core/net/JndiManager.java:244
+    message: >-
+      Attacker-controlled data reaches a JNDI Context.lookup() without a URI
+      scheme check. A JNDI name such as "ldap://attacker/a" makes the JVM fetch
+      and deserialize a remote object (Log4Shell, CVE-2021-44228). Validate the
+      scheme before the lookup, as JndiManager.lookup() does: reject any URI
+      whose getScheme() is neither null nor "java".
+
+    pattern-sources:
+      # A String parameter of a lookup-style method: this is how a format-string
+      # substitution key (${jndi:...}) enters the lookup implementation.
+      - patterns:
+          - pattern-inside: |
+              $RET $METHOD(..., String $KEY, ...) { ... }
+          - pattern: $KEY
+      # Data taken straight off a log event / message.
+      - pattern: $EVENT.getMessage().getFormattedMessage()
+      - pattern: $MSG.getFormattedMessage()
+      - pattern: org.apache.logging.log4j.ThreadContext.get($K)
+
+    pattern-sanitizers:
+      # The post-Log4Shell guard: only an absent or "java:" scheme is allowed.
+      - patterns:
+          - pattern-inside: |
+              if (<... $U.getScheme() ...>) { ... }
+      # Explicit allow-list membership tests.
+      - pattern: |
+          if (<... $ALLOWED.contains($X) ...>) { ... }
+
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: (javax.naming.Context $CTX).lookup($NAME)
+              - pattern: (javax.naming.InitialContext $CTX).lookup($NAME)
+              - pattern: (javax.naming.directory.DirContext $CTX).lookup($NAME)
+              - pattern: (javax.naming.Context $CTX).lookupLink($NAME)
+          - focus-metavariable: $NAME

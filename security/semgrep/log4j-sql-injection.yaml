@@ -1,0 +1,46 @@
+rules:
+  - id: log4j-sql-injection
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      category: security
+      confidence: MEDIUM
+      grounding: log4j-core/src/main/java/org/apache/logging/log4j/core/appender/db/jdbc/JdbcDatabaseManager.java:125,728
+    message: >-
+      A dynamically built SQL string reaches a JDBC statement. JdbcDatabaseManager
+      concatenates the configured table and column names into its INSERT
+      ("insert into " + tableName + " ("), so anyone who can supply the Log4j
+      configuration can inject SQL. Identifiers cannot be bound as parameters --
+      validate them against a strict pattern or quote them with
+      DatabaseMetaData.getIdentifierQuoteString() before concatenating.
+
+    pattern-sources:
+      - patterns:
+          - pattern-inside: |
+              $RET $METHOD(..., String $NAME, ...) { ... }
+          - pattern: $NAME
+      - pattern: $CONFIG.getTableName()
+      - pattern: $CONFIG.getColumnName()
+      - pattern: $EVENT.getMessage().getFormattedMessage()
+
+    pattern-sanitizers:
+      # Identifier validated against a strict character class.
+      - pattern: |
+          if (<... $X.matches("...") ...>) { ... }
+      - pattern: $X.matches($RE)
+      # Bound parameters are safe by construction.
+      - pattern: (java.sql.PreparedStatement $S).setString($I, $V)
+
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: (java.sql.Connection $C).prepareStatement($SQL, ...)
+              - pattern: (java.sql.Connection $C).prepareStatement($SQL)
+              - pattern: (java.sql.Connection $C).prepareCall($SQL)
+              - pattern: (java.sql.Statement $S).execute($SQL)
+              - pattern: (java.sql.Statement $S).executeQuery($SQL)
+              - pattern: (java.sql.Statement $S).executeUpdate($SQL)
+              - pattern: (java.sql.Statement $S).addBatch($SQL)
+          - focus-metavariable: $SQL
