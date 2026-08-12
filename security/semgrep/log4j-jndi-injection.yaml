@@ -26,7 +26,14 @@ rules:
         configuration or source, not an unauthenticated network request.
         severity/confidence reflect that narrower attack surface; the rule
         is kept for regressions and for other code reusing this sink
-        without the same guards.
+        without the same guards. The config-delivery half of that
+        prerequisite (getting a ${jndi:...} lookup into a Configuration
+        document at all) turns out to need neither CI/CD access nor a
+        filesystem write to the host app -- see
+        dynamic-proof/real-source/CONFIG_DELIVERY_VECTORS.md, which also
+        states plainly why this is the one rule those vectors only
+        partially reach: log4j2.enableJndiLookup=true is a separate JVM
+        property/env var that config-document content alone cannot set.
     message: >-
       Attacker-controlled data reaches a JNDI Context.lookup() without a URI
       scheme check. A JNDI name such as "ldap://attacker/a" makes the JVM fetch

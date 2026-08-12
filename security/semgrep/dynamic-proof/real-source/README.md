@@ -123,6 +123,21 @@ proof demonstrates the mechanism with `http` explicitly re-allowed (an
 operator-level property, not a code change) alongside that negative
 control, rather than glossing over the mitigation that exists.
 
+Asked to go narrower still — no CI/CD, no env var, no filesystem write at
+all — `XIncludeClasspathShadowProof.java` found one: Log4j's
+auto-configuration resolves `log4j2.xml` against the thread's *context*
+classloader, and a plugin loaded through any self-service upload feature
+(a custom JDBC driver, a theme, a connector — nothing to do with logging)
+can make that context classloader its own, child-first one, if the host
+application uses that common plugin-isolation pattern. Its `log4j2.xml`
+gets picked up ahead of the real one. `CONFIG_DELIVERY_VECTORS.md`
+compares all three vectors found across this investigation and states
+plainly which other rules each one reaches — it's not XInclude-specific;
+the same delivery mechanisms carry `log4j-sql-injection` and
+`log4j-script-injection` payloads equally, and partially reach
+`log4j-jndi-injection` (still gated by a separate `enableJndiLookup`
+property none of them can set).
+
 **SQL**: the real `JdbcDatabaseManager.getManager()` — the exact method a
 configured `<JDBC>` appender calls — was driven with a `DROP TABLE` payload
 as a table name, and the resulting SQL field (read via reflection, since it

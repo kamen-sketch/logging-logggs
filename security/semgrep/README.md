@@ -150,6 +150,22 @@ chain without touching the target's filesystem. Also confirmed: the
 default protocol allow-list genuinely blocks plain `http` for that fetch —
 a real mitigation, credited rather than glossed over.
 
+Pushed to go narrower still — no CI/CD, no env var either —
+`XIncludeClasspathShadowProof.java` found a smaller prerequisite than
+either: Log4j's auto-configuration resolves `log4j2.xml` against the
+*thread's context classloader*, and a plugin loaded through any
+self-service upload feature unrelated to logging (a JDBC driver, a theme,
+a connector) can make that its own, child-first classloader if the host
+application uses that common plugin-isolation pattern — its bundled
+`log4j2.xml` then gets picked up first, with no filesystem write to any
+path the host controls, no env var, no pipeline. This mechanism is not
+XInclude-specific either: `dynamic-proof/real-source/CONFIG_DELIVERY_VECTORS.md`
+compares all three vectors and states which other rules each one reaches —
+the same delivery carries `log4j-sql-injection`/`log4j-script-injection`
+payloads too, and partially reaches `log4j-jndi-injection` (still gated
+behind the separate `enableJndiLookup` property, which config content
+alone cannot set).
+
 ## Not reachable from unauthenticated input — except one — but not a false positive either
 
 After the false-negative fixes below, a further question came up: is any of

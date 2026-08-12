@@ -206,18 +206,46 @@ whole finding has been honest about from the start, just concretely
 narrowed to its smallest real shape instead of the broadest, least
 plausible one.
 
+## Narrower still: no CI/CD, no env var, no filesystem write at all
+
+Asked directly whether an even smaller prerequisite exists — one that needs
+neither CI/CD pipeline access nor any control over the target process's
+launch environment — the answer is yes, proven the same way as everything
+above: by driving real code, not by arguing it should work.
+`XIncludeClasspathShadowProof.java` shows that Log4j's own default
+auto-configuration resolves `log4j2.xml` against
+`LoaderUtil.getThreadContextClassLoader()`
+(`ConfigurationSource.fromResource()`), and if that thread's context
+classloader is a plugin's own, child-first classloader — the standard
+isolation pattern many real Java plugin systems use, including OSGi,
+specifically so a plugin's resources can override the host's — a
+`log4j2.xml` bundled inside that plugin gets picked up first. The attacker
+needs only whatever a self-service plugin/driver/theme/connector-upload
+feature already accepts, unrelated to logging entirely. No filesystem path
+the host application controls is written to, no environment variable is
+touched, no pipeline is involved.
+
+The full comparison of all three vectors found in this session — including
+which ones generalize to `log4j-sql-injection`/`log4j-script-injection`
+too, and the one honest exception (`log4j-jndi-injection`, still gated by a
+separate `enableJndiLookup` property none of these vectors can set) — is in
+`CONFIG_DELIVERY_VECTORS.md` in this directory.
+
 ## Conclusion
 
 A real, empirically-confirmed hardening gap: XInclude slips past every XXE
 protection already in place, the file it reads is not stuck inside the
 parser (it can surface as a real, attacker-visible artifact using nothing
 but log4j's own Properties and attribute-substitution features), and —
-corrected twice now by testing instead of assuming — reaching it does not
-require filesystem write access to the target host at all: control over one
-environment variable at process launch is enough. Severity is still bounded
-by that prerequisite, not by any limit on where the read content can end
-up or how directly it's reached — correctly classified as missing-hardening
-MEDIUM (some control over the target process's configuration or launch
-environment required, not a remote unauthenticated vector like Log4Shell),
-but the concrete shape of that prerequisite is now the smallest, most
-plausible one found, not the largest.
+corrected three times now by testing instead of assuming — reaching it
+does not require filesystem write access to the target host, an
+environment variable, or CI/CD access: the narrowest prerequisite found is
+a plugin/driver/theme upload feature unrelated to logging, in an
+architecture using child-first plugin classloading. Severity is still
+bounded by needing *some* form of "the attacker's content gets loaded by
+the target process," not by any limit on where the read content can end up
+or how directly it's reached — correctly classified as missing-hardening
+MEDIUM (not a remote unauthenticated vector like Log4Shell, which needed no
+such precondition at all), but the concrete shape of that prerequisite is
+now the smallest, most plausible one found in this session, not the
+largest.
