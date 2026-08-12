@@ -82,6 +82,7 @@ What `validate.py` **does** verify locally, and passes:
 
 | Rule | CWE | Sink | Severity | Reachable unauthenticated? |
 |---|---|---|---|---|
+| `log4j-jmx-remote-reconfig` | CWE-306 | `MBeanServer.invoke(..., "setConfigText"/"setConfigLocationUri", ...)` | WARNING | Only if JMX remote management is separately exposed without auth — not a Log4j bug, see below |
 | `log4j-jndi-injection` | CWE-74 | `Context.lookup` | WARNING | No — gated behind explicit opt-in |
 | `log4j-script-injection` | CWE-94 | `ScriptEngine.eval` | WARNING | No — config-controlled input only |
 | `log4j-sql-injection` | CWE-89 | `prepareStatement` / `execute*` | WARNING | No — config-controlled input only |
@@ -90,9 +91,41 @@ What `validate.py` **does** verify locally, and passes:
 | `log4j-xinclude` | CWE-611 | `setXIncludeAware(true)` | WARNING | No — same config-file trust boundary as `log4j-xxe`; see below for what makes it a genuinely separate gap, not a duplicate |
 | `log4j-xxe` | CWE-611 | `newDocumentBuilder` | WARNING | No — parses the trusted config file itself |
 
-25 positive, 15 negative, and 3 `todoruleid` (known-gap, not enforced)
+28 positive, 18 negative, and 3 `todoruleid` (known-gap, not enforced)
 fixture cases. Each rule's `metadata.reachability` field carries the
 specific evidence (see "Not reachable from unauthenticated input" below).
+
+## `log4j-jmx-remote-reconfig`: a sink found while asking "is this even a bug?"
+
+Added after the `log4j-xinclude` config-delivery investigation
+(`dynamic-proof/real-source/CONFIG_DELIVERY_VECTORS.md`) turned up
+`LoggerContextAdminMBean.setConfigText()`/`setConfigLocationUri()` — real
+JMX operations that reconfigure a running `LoggerContext` from arbitrary
+caller-supplied content, no URL or file needed. Directly asked whether
+that's actually a Log4j gap or just the feature working as designed: the
+latter — `LoggerContextAdminMBean` is a deliberately documented
+remote-management interface, no different in kind from
+`java.util.logging`'s `LoggingMXBean`. The rule exists anyway because the
+*sink* (arbitrary config injection once reached) is exactly as dangerous
+as `log4j-xxe`/`log4j-xinclude`/`log4j-sql-injection`/
+`log4j-script-injection`'s sinks, and code review benefits from flagging
+"is this reachable by anything other than a fully trusted operator?" —
+the rule's own `metadata.reachability` says so plainly rather than
+implying a code-level bug that isn't there.
+
+Modeled on `MBeanServerConnection.invoke($OBJNAME, "setConfigText", ...)`
+by operation-name string, not a typed method call on
+`LoggerContextAdminMBean` — that's how a real JMX client (including
+`dynamic-proof/real-source/XIncludeJmxProof.java`) actually reaches it,
+through a raw `invoke()` call rather than a typed proxy, so a typed-call
+pattern would miss the realistic case. Checked the public Semgrep rules
+registry (`github.com/semgrep/semgrep-rules`) first for an existing
+JMX/MBean rule to adapt — none exists there — and for metadata field
+conventions to adopt instead: `java/rmi/security/` (JMX's own transport)
+supplied the `owasp` tag and separate `likelihood`/`impact` enum fields
+this ruleset hadn't used before, now added alongside its own established
+narrative `grounding`/`reachability`/`impact` fields rather than replacing
+them.
 
 ## `log4j-xinclude`: a gap `log4j-xxe`'s hardening doesn't cover
 
@@ -403,6 +436,7 @@ requirement collides with javac's rule that a *public* class must match its
 filename, so the fixture classes are deliberately package-private.
 
 ```
+log4j-jmx-remote-reconfig.yaml / .java
 log4j-jndi-injection.yaml / .java
 log4j-script-injection.yaml / .java
 log4j-sql-injection.yaml / .java

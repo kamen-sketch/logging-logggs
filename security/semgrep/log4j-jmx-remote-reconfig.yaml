@@ -1,0 +1,90 @@
+# Not taint mode: unlike the JNDI/SQL/Script rules, there is no interesting
+# source-to-sink FLOW to model here -- calling either of these two operations
+# at all, with content the caller does not fully control, is the finding.
+# Matches JMX invoke() calls by operation-name string literal rather than a
+# typed method call, because that is how a real JMX client (including this
+# ruleset's own dynamic-proof/real-source/XIncludeJmxProof.java) actually
+# reaches LoggerContextAdminMBean -- through MBeanServerConnection.invoke(),
+# not a typed proxy, so a typed-call pattern would miss the realistic case.
+#
+# Metadata style: cross-referenced against the public Semgrep rules registry
+# (github.com/semgrep/semgrep-rules, java/rmi/security/ in particular --
+# JMX's own transport) for field conventions this ruleset hadn't used yet:
+# a structured `owasp` tag and separate `likelihood`/`impact` enums alongside
+# `confidence`, on top of this ruleset's existing narrative
+# grounding/reachability/impact fields. No existing JMX/MBean rule was found
+# in that registry to model the pattern itself on -- this appears to be a
+# new one, not an adaptation of an existing one.
+rules:
+  - id: log4j-jmx-remote-reconfig
+    languages: [java]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-306: Missing Authentication for Critical Function"
+      category: security
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      owasp:
+        - "A07:2021 - Identification and Authentication Failures"
+      references:
+        - dynamic-proof/real-source/CONFIG_DELIVERY_VECTORS.md
+        - dynamic-proof/real-source/XIncludeJmxProof.java
+      grounding: log4j-core/src/main/java/org/apache/logging/log4j/core/jmx/LoggerContextAdmin.java:124,201; log4j-api/src/main/java/org/apache/logging/log4j/util/internal/JmxUtil.java (referenced from log4j-core/.../jmx/internal)
+      reachability: >-
+        NOT a bug in Log4j's own logic -- LoggerContextAdminMBean is a
+        deliberately designed, documented remote-management interface (like
+        java.util.logging's LoggingMXBean), and setConfigText()/
+        setConfigLocationUri() reconfiguring a running LoggerContext from
+        caller-supplied content is that feature working exactly as intended.
+        This rule exists because reaching it is entirely gated by JMX's own
+        access model, external to Log4j: Log4j's JMX instrumentation is
+        DISABLED by default (JmxUtil.isJmxDisabled() defaults true --
+        log4j2.disable.jmx must be explicitly set to "false"), and reaching
+        the MBean at all further requires the JVM's own JMX remote
+        management to be enabled and reachable, commonly without
+        authentication in real misconfigured deployments (a separate,
+        well-documented, long-standing vulnerability category with its own
+        history outside Log4j). Confirmed end to end against the real
+        MBean, not a description of what it should do: see
+        XIncludeJmxProof.java, which drives setConfigText() through the
+        real platform MBeanServer and reconfigures with an XInclude payload
+        that reads and exfiltrates a local file. NOT independently verified
+        in this session: whether a JMX `readonly`-role principal
+        (jmxremote.access) can invoke this at all -- standard JMX access
+        controllers are understood to reserve invoke() for `readwrite`
+        roles, which would narrow real exposure to "JMX reachable AND
+        either unauthenticated or granted write access," not just "JMX
+        reachable."
+      impact: >-
+        Once reached, this is a config-content-control primitive with the
+        same blast radius as any other rule in this ruleset that assumes
+        config control (log4j-xinclude, log4j-xxe, log4j-sql-injection,
+        log4j-script-injection all become reachable through a config pushed
+        this way) -- proven concretely via XInclude: arbitrary local file
+        read that can be made to surface in an attacker-visible artifact
+        (see XIncludeExfilProof.java), not merely consumed internally.
+        log4j-jndi-injection is the one exception: it additionally requires
+        log4j2.enableJndiLookup=true, a separate property this mechanism
+        cannot itself set.
+    message: >-
+      A JMX operation named "setConfigText" or "setConfigLocationUri" is
+      invoked -- these are LoggerContextAdminMBean's real, documented
+      remote-reconfiguration operations
+      (org.apache.logging.log4j.core.jmx.LoggerContextAdmin), which parse
+      and apply arbitrary caller-supplied configuration content or URI to a
+      running LoggerContext with no additional validation of their own.
+      This is not a Log4j logic bug -- it is intended remote-management
+      behavior whose safety depends entirely on JMX's own access control
+      (log4j2.disable.jmx defaults to disabled; the JVM's JMX remote
+      management, if enabled, needs its own authentication). If this code
+      path is reachable by anything other than a fully trusted,
+      authenticated operator, treat it as equivalent to arbitrary Log4j
+      config injection -- including the log4j-xinclude/log4j-xxe/
+      log4j-sql-injection/log4j-script-injection sinks in this same
+      ruleset.
+    patterns:
+      - pattern-either:
+          - pattern: $MBS.invoke($OBJNAME, "setConfigText", ...)
+          - pattern: $MBS.invoke($OBJNAME, "setConfigLocationUri", ...)
+          - pattern: java.lang.System.setProperty("log4j2.disable.jmx", "false")
