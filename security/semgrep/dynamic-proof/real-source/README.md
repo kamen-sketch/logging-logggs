@@ -175,6 +175,23 @@ operation further requires the JVM's own JMX remote management to be
 enabled and reachable, a separate, well-documented vulnerability category
 (unauthenticated exposed JMX/RMI) with its own history outside Log4j.
 
+Asked directly whether this is even a Log4j gap or just intended
+behavior: the latter, and unlike vector 3 this isn't a retraction.
+`LoggerContextAdminMBean` is a deliberately designed remote-management
+interface, no different in kind from `java.util.logging`'s
+`LoggingMXBean` or any other JVM service's own admin MBeans;
+`setConfigText()` reconfiguring from pushed text is the feature doing
+exactly what its own log message says, not a misreading of what the code
+does (vector 3's retraction rested on exactly that kind of misreading of
+`ClassLoaderContextSelector`). The finding here is entirely about *who
+gets to call it* — governed by JMX's own access model, not by anything in
+Log4j's own logic. Left open rather than resolved: whether a
+`readonly`-role JMX principal can invoke this operation at all (standard
+JMX access controllers are understood to reserve `invoke()` for
+`readwrite` roles), which would narrow the real precondition to "JMX
+reachable *and* either unauthenticated or granted write access" — not
+independently verified in this session.
+
 `CONFIG_DELIVERY_VECTORS.md` has the full ranking of every vector that
 holds and every one retracted, and which other rules each reaches.
 

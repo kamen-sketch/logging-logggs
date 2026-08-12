@@ -182,9 +182,23 @@ JMX-managed operation, `LoggerContextAdminMBean.setConfigText(String,
 String)`, whose own log line reads `"Remote request to reconfigure from
 config text"` — it runs pushed config text straight through the same
 pipeline, no URL or file at all. Proven via the real MBean on the platform
-`MBeanServer`: `XIncludeJmxProof.java`. Its one real precondition — Log4j's
-JMX instrumentation is off by default — is stated plainly, not glossed
-over. Full ranking of everything that holds vs. what was retracted is in
+`MBeanServer`: `XIncludeJmxProof.java`.
+
+Directly asked whether this is even a Log4j gap, or just the feature
+working as intended: the latter, and that's a different answer than
+vector 3 got. `LoggerContextAdminMBean` is a deliberately designed,
+documented remote-management interface — `setConfigText()` reconfiguring
+from pushed text is correct behavior, not a misreading of the code (unlike
+vector 3, which rested on a misreading of `ClassLoaderContextSelector`).
+The finding is entirely about *who* can reach the operation, governed by
+JMX's own access model — Log4j's own JMX instrumentation being off by
+default is the one precondition stated plainly here. Left open, not
+verified either way: whether a `readonly`-role JMX principal can even
+invoke this at all (standard JMX access controllers are understood to
+reserve `invoke()` operations for `readwrite` roles), which would narrow
+this further than "JMX reachable" to "JMX reachable and either
+unauthenticated or granted write access." Full ranking of everything that
+holds vs. what was retracted is in
 `dynamic-proof/real-source/CONFIG_DELIVERY_VECTORS.md`.
 
 ## Not reachable from unauthenticated input — except one — but not a false positive either

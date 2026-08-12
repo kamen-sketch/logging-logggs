@@ -136,7 +136,28 @@ response with no `Last-Modified` header produces exactly that. Real HTTP
 config servers normally send one; the proof's test server was fixed to
 send one too, rather than the finding being quietly quiet-failed past.
 
-### Vector 5 — holds, and needs neither a URL nor `monitorInterval` at all
+### Vector 5 — holds, but unlike vector 3 this is the feature working exactly as designed
+
+Directly asked, correctly: is JMX-driven reconfiguration actually intended
+Log4j behavior, or a gap — and if intended, what makes it a finding at
+all? This deserves a different answer than vector 3 got, not the same
+"retracted" treatment, because the underlying question is different in
+kind.
+
+`LoggerContextAdminMBean` is not incidental exposure of something that
+should have stayed private — it is a deliberately designed, documented
+remote-management interface, exactly like `java.util.logging`'s
+`LoggingMXBean`, or the JMX MBeans Tomcat/Kafka/many other JVM services
+ship for the same reason: let an authorized operator change runtime
+behavior without a restart. `setConfigText()` doing exactly what its own
+log message says — reconfiguring from pushed text — is the feature
+working correctly, not a logic bug in Log4j's own code. This is the
+opposite situation from vector 3: there, the retracted claim rested on a
+*misreading* of what `ClassLoaderContextSelector` does (it actually
+prevents cross-boundary config confusion by design). Here, the read of
+what `setConfigText()` does is accurate — it reconfigures from arbitrary
+content, on purpose — and the finding is entirely about *who gets to call
+it*, not about what it does once called.
 
 Asked for something narrower than vector 4: no `monitorInterval`, and the
 content genuinely, directly attacker-controlled — not dependent on
@@ -179,6 +200,25 @@ behavior, not Log4j-specific, and wasn't what needed testing here. What
 *is* proven directly against real Log4j code: once anything reaches this
 operation with content of its choosing, XInclude fires exactly as
 everywhere else in this investigation.
+
+**Not verified in this session, stated as an open question rather than
+assumed either way**: JMX's own remote connectors support a `readonly` /
+`readwrite` access model (`jmxremote.access` file), and the standard JMX
+RMI connector's access controller is understood to block `invoke()`
+operations — `setConfigText()` among them — for principals granted only
+`readonly`, reserving that for attribute getters and read-style queries.
+If that holds for this MBean specifically (not independently confirmed
+here — it would require standing up a real authenticated RMI connector,
+which tests generic JMX security semantics, not Log4j), the real
+precondition for vector 5 is narrower than "JMX reachable": it's "JMX
+reachable **and** either unauthenticated or granted a `readwrite` role."
+Plenty of real deployments run JMX with authentication specifically
+restricted to `readonly` for monitoring dashboards (Prometheus/Grafana JMX
+exporters and similar), which would sit outside this vector even with JMX
+fully enabled and network-reachable. This matters because it's the
+difference between "any exposed JMX is enough" and "exposed JMX with
+write access is required" — a materially different bar, left open rather
+than resolved in either direction.
 
 Also worth noting in passing, found while reading the surrounding code,
 not chased further: the sibling operation `setConfigLocationUri(String)`

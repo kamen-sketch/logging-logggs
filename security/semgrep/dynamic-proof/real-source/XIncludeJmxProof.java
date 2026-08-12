@@ -20,6 +20,22 @@
 // java.rmi, not Log4j). What IS proven directly: once something reaches
 // this operation with any content it likes, XInclude fires exactly as
 // everywhere else in this investigation.
+//
+// Is this a Log4j gap, or the feature working as designed? The latter --
+// and that's a different answer than the retracted classpath-shadowing
+// claim got. LoggerContextAdminMBean is a deliberately designed,
+// documented remote-management interface (like java.util.logging's
+// LoggingMXBean or any app server's own JMX MBeans); setConfigText()
+// reconfiguring from pushed text is correct, intended behavior, not a
+// misreading of what the code does. The finding is entirely about WHO can
+// reach this operation, which is governed by JMX's own access model, not
+// by anything Log4j's own code decides. NOT verified here: whether a
+// readonly-role JMX principal (jmxremote.access) can invoke this at all --
+// standard JMX access controllers are understood to reserve invoke()
+// operations for readwrite roles, which would narrow this vector's real
+// precondition to "JMX reachable AND unauthenticated-or-readwrite," not
+// just "JMX reachable." Left open rather than assumed either way; see
+// CONFIG_DELIVERY_VECTORS.md.
 
 import java.io.File;
 import java.io.FileWriter;
