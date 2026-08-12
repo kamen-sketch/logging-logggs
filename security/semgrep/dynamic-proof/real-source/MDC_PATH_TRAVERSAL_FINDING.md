@@ -253,6 +253,52 @@ one worth correcting; the general "the `.log` suffix makes this safe"
 framing was not accurate and has been removed from the impact reasoning
 below.
 
+### Pushed further: is there some OTHER standard Linux service that isn't as careful as `run-parts`?
+
+Asked directly to keep looking, rather than stop at the one negative
+result. Checked what else exists for "drop a script in a directory, it
+gets run" on real systems — and hit a real, honest limit of this specific
+sandbox: it doesn't run an actual init system (`/proc/1/comm` is
+`process_api`, a container-runtime wrapper, not `systemd` or `sysvinit`),
+and none of `anacron`, `ifupdown` (`/etc/network/if-up.d/`), or
+`NetworkManager` (`/etc/NetworkManager/dispatcher.d/`) are installed on
+it — confirmed by checking, not assumed absent:
+
+```
+$ dpkg -l anacron          # "un" = not installed, not even unpacked
+$ ls /etc/network/if-up.d  # No such file or directory
+$ ls /etc/NetworkManager/dispatcher.d  # No such file or directory
+```
+
+So none of those three could be tested against real behavior here, and
+that limitation is stated plainly rather than papered over with a guess.
+What can be said with reasonable, but not proof-level, confidence:
+
+- **`ifupdown`'s `if-up.d`/`if-down.d`/`if-pre-up.d`/`if-post-down.d`** are,
+  by Debian packaging convention, invoked through the same `run-parts`
+  mechanism `cron.d` uses — plausibly the same dotted-filename filtering,
+  but not independently confirmed on a real instance here.
+- **NetworkManager's `dispatcher.d`** does its own directory scan in C,
+  not via `run-parts` — genuinely uncertain whether it filters dotted
+  names the same way; not verified either direction.
+- **The broader pattern already found (`run-parts`, `docker-entrypoint.d/*.sh`
+  globs, `/etc/profile.d/*.sh` sourcing) is that well-maintained drop-in
+  directories tend to filter by an explicit name pattern specifically to
+  prevent this exact class of attack** — a lesson the ecosystem has
+  largely already learned. Continuing to search for a standard,
+  widely-deployed service that skips this precaution is a reasonable
+  next step for someone with a real, non-containerized Linux host to
+  verify directly, but isn't something this sandbox can settle further.
+
+The reliable, already-proven exploitation shape remains what's confirmed
+above: either something *application-specific* explicitly reads/executes
+the file at that exact path (the "log poisoning" pattern — `include()`,
+`require()`, a custom deploy/watcher script), or an operator/attacker
+with the right access invokes an interpreter on it directly. "A generic
+Linux service will find and run it with no further help" is not
+established, and the one concrete candidate tested for it (`run-parts`)
+turned out to actively prevent it.
+
 ## Does this apply to Java itself — the very runtime the vulnerable app is written in?
 
 Asked directly, and checked rather than assumed either way, since the
