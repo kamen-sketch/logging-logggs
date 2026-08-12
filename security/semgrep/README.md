@@ -151,20 +151,24 @@ default protocol allow-list genuinely blocks plain `http` for that fetch —
 a real mitigation, credited rather than glossed over.
 
 Pushed to go narrower still — no CI/CD, no env var either —
-`XIncludeClasspathShadowProof.java` found a smaller prerequisite than
-either: Log4j's auto-configuration resolves `log4j2.xml` against the
-*thread's context classloader*, and a plugin loaded through any
-self-service upload feature unrelated to logging (a JDBC driver, a theme,
-a connector) can make that its own, child-first classloader if the host
-application uses that common plugin-isolation pattern — its bundled
-`log4j2.xml` then gets picked up first, with no filesystem write to any
-path the host controls, no env var, no pipeline. This mechanism is not
-XInclude-specific either: `dynamic-proof/real-source/CONFIG_DELIVERY_VECTORS.md`
-compares all three vectors and states which other rules each one reaches —
-the same delivery carries `log4j-sql-injection`/`log4j-script-injection`
-payloads too, and partially reaches `log4j-jndi-injection` (still gated
-behind the separate `enableJndiLookup` property, which config content
-alone cannot set).
+`XIncludeClasspathShadowProof.java` first found what looked like a smaller
+prerequisite: Log4j's auto-configuration resolves `log4j2.xml` against the
+*thread's context classloader*, and a plugin's own child-first classloader
+could shadow it. Challenged directly — "isn't a plugin's own classloader
+resolving its own resources just intended isolation behavior, what's
+actually different from normal?" — that claim was checked harder instead
+of defended, by reading `ClassLoaderContextSelector.locateContext()` and
+testing both possible orderings. It doesn't hold as a general scenario:
+`locateContext()` walks up to an ancestor's *existing* context before ever
+doing a fresh classpath scan, so in the realistic ordering — the host
+touches Log4j first, true of almost any real app — the plugin is just
+handed the host's already-resolved context; nothing shadows. Only the
+opposite, attacker-uncontrolled ordering (the plugin's own classloader
+lineage is the very first thing anywhere to touch Log4j) leaks, which
+isn't something an attacker who merely gets a plugin loaded can force. Full
+correction, mechanism, and the ranking of what *does* hold (the env-var
+vector above, and which other rules it reaches) is in
+`dynamic-proof/real-source/CONFIG_DELIVERY_VECTORS.md`.
 
 ## Not reachable from unauthenticated input — except one — but not a false positive either
 

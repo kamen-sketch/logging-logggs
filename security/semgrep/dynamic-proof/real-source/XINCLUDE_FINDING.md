@@ -206,46 +206,65 @@ whole finding has been honest about from the start, just concretely
 narrowed to its smallest real shape instead of the broadest, least
 plausible one.
 
-## Narrower still: no CI/CD, no env var, no filesystem write at all
+## Narrower still? A claim made, then retracted by testing it harder
 
 Asked directly whether an even smaller prerequisite exists — one that needs
 neither CI/CD pipeline access nor any control over the target process's
-launch environment — the answer is yes, proven the same way as everything
-above: by driving real code, not by arguing it should work.
-`XIncludeClasspathShadowProof.java` shows that Log4j's own default
+launch environment — the first answer given here was "yes": Log4j's
 auto-configuration resolves `log4j2.xml` against
-`LoaderUtil.getThreadContextClassLoader()`
-(`ConfigurationSource.fromResource()`), and if that thread's context
-classloader is a plugin's own, child-first classloader — the standard
-isolation pattern many real Java plugin systems use, including OSGi,
-specifically so a plugin's resources can override the host's — a
-`log4j2.xml` bundled inside that plugin gets picked up first. The attacker
-needs only whatever a self-service plugin/driver/theme/connector-upload
-feature already accepts, unrelated to logging entirely. No filesystem path
-the host application controls is written to, no environment variable is
-touched, no pipeline is involved.
+`LoaderUtil.getThreadContextClassLoader()`, and a plugin's own child-first
+classloader (a real, common isolation pattern) could shadow it. That
+answer was then challenged directly and correctly — "isn't a plugin's own
+classloader resolving its own resources just how isolation is *supposed*
+to work? What's actually different from normal behavior?" — and checking
+that harder, by reading `ClassLoaderContextSelector.locateContext()` and
+testing both possible orderings rather than defending the first result,
+falsified it as a general claim.
 
-The full comparison of all three vectors found in this session — including
-which ones generalize to `log4j-sql-injection`/`log4j-script-injection`
-too, and the one honest exception (`log4j-jndi-injection`, still gated by a
-separate `enableJndiLookup` property none of these vectors can set) — is in
+`locateContext()` does not give every classloader an independently-resolved
+context. It only performs a fresh classpath scan when **no context already
+exists for that classloader or any of its ancestors** — it walks the
+parent chain first and reuses an ancestor's context if one is found. In
+the realistic ordering (the host touches Log4j first, which is true of
+almost any real application — it logs a startup message before ever
+loading a user-supplied plugin), the plugin's classloader is simply handed
+the host's *already-established* context; its shadowed config is never
+read. `XIncludeClasspathShadowProof.java` now proves this directly:
+`hostCtx == pluginCtx` is `true` in that ordering, and no secret leaks.
+Shadowing only succeeds in the opposite, narrow ordering — the plugin's
+classloader lineage being the very first thing anywhere in the process to
+touch Log4j, before the host's own ever does — which an attacker who
+merely gets a plugin loaded does not control and cannot reliably force.
+This is *not* presented as a viable real-world scenario. It's kept on
+record specifically because the correction and the mechanism behind it are
+worth having, in a ruleset built around not overclaiming: a proof that
+passes is not automatically a realistic scenario, and the gap between them
+is worth testing for, not assuming away.
+
+The full, corrected comparison of every vector investigated in this
+session — including which of the *surviving* ones generalize to
+`log4j-sql-injection`/`log4j-script-injection` too, and the one honest
+exception (`log4j-jndi-injection`, still gated by a separate
+`enableJndiLookup` property none of them can set) — is in
 `CONFIG_DELIVERY_VECTORS.md` in this directory.
 
 ## Conclusion
 
 A real, empirically-confirmed hardening gap: XInclude slips past every XXE
-protection already in place, the file it reads is not stuck inside the
+protection already in place, and the file it reads is not stuck inside the
 parser (it can surface as a real, attacker-visible artifact using nothing
-but log4j's own Properties and attribute-substitution features), and —
-corrected three times now by testing instead of assuming — reaching it
-does not require filesystem write access to the target host, an
-environment variable, or CI/CD access: the narrowest prerequisite found is
-a plugin/driver/theme upload feature unrelated to logging, in an
-architecture using child-first plugin classloading. Severity is still
-bounded by needing *some* form of "the attacker's content gets loaded by
-the target process," not by any limit on where the read content can end up
-or how directly it's reached — correctly classified as missing-hardening
-MEDIUM (not a remote unauthenticated vector like Log4Shell, which needed no
-such precondition at all), but the concrete shape of that prerequisite is
-now the smallest, most plausible one found in this session, not the
+but log4j's own Properties and attribute-substitution features). Reaching
+it does not require filesystem write access to the target host: control
+over one environment variable/property at process launch (proven,
+`XIncludeRemoteConfigProof.java`) is enough. A narrower-still classpath-
+shadowing vector was proposed, tested harder after being challenged, and
+correctly retracted as a general claim — it only works under a timing
+precondition the attacker doesn't control, not as a realistic scenario.
+Severity is still bounded by needing *some* form of "the attacker
+influences what the target process loads as configuration," not by any
+limit on where the read content can end up or how directly it's reached —
+correctly classified as missing-hardening MEDIUM (not a remote
+unauthenticated vector like Log4Shell, which needed no such precondition
+at all), but the concrete shape of that prerequisite is the smallest
+*demonstrated and realistic* one found in this session, not the
 largest.

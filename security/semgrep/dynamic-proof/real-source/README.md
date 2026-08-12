@@ -124,19 +124,26 @@ operator-level property, not a code change) alongside that negative
 control, rather than glossing over the mitigation that exists.
 
 Asked to go narrower still — no CI/CD, no env var, no filesystem write at
-all — `XIncludeClasspathShadowProof.java` found one: Log4j's
-auto-configuration resolves `log4j2.xml` against the thread's *context*
-classloader, and a plugin loaded through any self-service upload feature
-(a custom JDBC driver, a theme, a connector — nothing to do with logging)
-can make that context classloader its own, child-first one, if the host
-application uses that common plugin-isolation pattern. Its `log4j2.xml`
-gets picked up ahead of the real one. `CONFIG_DELIVERY_VECTORS.md`
-compares all three vectors found across this investigation and states
-plainly which other rules each one reaches — it's not XInclude-specific;
-the same delivery mechanisms carry `log4j-sql-injection` and
-`log4j-script-injection` payloads equally, and partially reach
-`log4j-jndi-injection` (still gated by a separate `enableJndiLookup`
-property none of them can set).
+all — `XIncludeClasspathShadowProof.java` first appeared to find one:
+Log4j's auto-configuration resolves `log4j2.xml` against the thread's
+*context* classloader, and a plugin's own child-first classloader (a real,
+common isolation pattern) could shadow it. That claim was directly
+challenged — isn't a plugin resolving its own resources just intended
+classloader-isolation behavior, not different from normal? — and checking
+it harder, instead of defending it, disproved it as a general scenario.
+`ClassLoaderContextSelector.locateContext()` walks up to an *existing*
+ancestor context before ever doing a fresh classpath scan; in the
+realistic ordering (the host touches Log4j first, true of almost any real
+app), the plugin is simply handed the host's already-resolved context —
+`hostCtx == pluginCtx`, confirmed directly — and nothing shadows. Only the
+opposite, attacker-uncontrolled ordering leaks, which isn't something an
+attacker who merely gets a plugin loaded can reliably force. The proof and
+the full correction are kept on record in
+`CONFIG_DELIVERY_VECTORS.md` — not as a viable scenario, but because
+testing a claim harder instead of defending it is exactly the standard
+this ruleset holds itself to, wrong claims included. The vector that
+*does* hold (config-location property/env var pointing at a URL) and which
+other rules it reaches is also there.
 
 **SQL**: the real `JdbcDatabaseManager.getManager()` — the exact method a
 configured `<JDBC>` appender calls — was driven with a `DROP TABLE` payload
