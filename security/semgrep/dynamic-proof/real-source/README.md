@@ -37,8 +37,8 @@ is what these proofs check, per rule:
 | `log4j-script-injection` | a script, through the real script engine discovery and execution | `ScriptManager`, a real `javax.script.ScriptEngineFactory` registered via `META-INF/services` |
 | `log4j-ssl-hostname-verification` | a real local TLS server presenting a certificate for the WRONG hostname | `SslConfiguration`, `SslSocketManager.createSocket()` (private, reached via reflection) |
 | `log4j-unsafe-deserialization` | nothing — investigated and found not reachable | see `DESERIALIZATION_FINDING.md` |
-| *(no rule yet)* | untrusted `ThreadContext` (MDC) data, through a `RoutingAppender`'s per-event dynamic file-path resolution | `RoutingAppender.append()`/`.createAppender()`, `FileManager` — see `MDC_PATH_TRAVERSAL_FINDING.md` |
-| *(no rule yet)* | the SAME untrusted `ThreadContext` (MDC) mechanism, reaching `HttpAppender`'s `url` attribute instead of a file path — SSRF | `RoutingAppender.append()`/`.createAppender()`, `HttpAppender.Builder`, `PluginBuilder` attribute substitution — see `MDC_SSRF_FINDING.md` |
+| `log4j-mdc-path-traversal` | untrusted `ThreadContext` (MDC) data, through a `RoutingAppender`'s per-event dynamic file-path resolution | `RoutingAppender.append()`/`.createAppender()`, `FileManager` — see `MDC_PATH_TRAVERSAL_FINDING.md` |
+| `log4j-mdc-ssrf` | the SAME untrusted `ThreadContext` (MDC) mechanism, reaching `HttpAppender`'s `url` attribute instead of a file path — SSRF | `RoutingAppender.append()`/`.createAppender()`, `HttpAppender.Builder`, `PluginBuilder` attribute substitution — see `MDC_SSRF_FINDING.md` |
 
 ## What each proof found, concretely
 

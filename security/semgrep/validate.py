@@ -26,7 +26,19 @@ import yaml
 HERE = pathlib.Path(__file__).parent
 REQUIRED = ("id", "message", "severity", "languages")
 VALID_SEVERITY = {"ERROR", "WARNING", "INFO"}
-ANNOT = re.compile(r"//\s*(ruleid|ok|todoruleid|todook):\s*([A-Za-z0-9_.-]+)")
+VALID_LANGUAGES = ({"java"}, {"generic"})
+
+# Two fixture styles: `.java` fixtures use `//` line comments (Semgrep's own
+# `--test` annotation convention for that language); `.xml` fixtures (the
+# `languages: [generic]` / `pattern-regex` rules -- the dangerous pattern
+# lives in XML config content, not Java source, so there's no AST for those
+# rules to match against) use `<!-- -->` comments instead, since that's what
+# Semgrep's test runner recognizes for non-`//`-comment file types.
+ANNOT_BY_SUFFIX = {
+    ".java": re.compile(r"//\s*(ruleid|ok|todoruleid|todook):\s*([A-Za-z0-9_.-]+)"),
+    ".xml": re.compile(r"<!--\s*(ruleid|ok|todoruleid|todook):\s*([A-Za-z0-9_.-]+)\s*-->"),
+}
+COMMENT_PREFIX_BY_SUFFIX = {".java": "//", ".xml": "<!--"}
 
 failures: list[str] = []
 notes: list[str] = []
@@ -112,9 +124,11 @@ for path in yaml_files:
         if rule["severity"] not in VALID_SEVERITY:
             fail(f"{rid}: severity '{rule['severity']}' not one of {sorted(VALID_SEVERITY)}")
 
-        if rule["languages"] != ["java"]:
-            fail(f"{rid}: expected languages [java], got {rule['languages']}")
-
+        if set(rule["languages"]) not in VALID_LANGUAGES:
+            fail(
+                f"{rid}: expected languages to be exactly one of "
+                f"{[sorted(s) for s in VALID_LANGUAGES]}, got {rule['languages']}"
+            )
         if rule.get("mode") == "taint":
             for key in ("pattern-sources", "pattern-sinks"):
                 if not rule.get(key):
@@ -122,8 +136,8 @@ for path in yaml_files:
             if not rule.get("pattern-sanitizers"):
                 notes.append(f"{rid}: taint rule declares no pattern-sanitizers")
         else:
-            if not any(k in rule for k in ("pattern", "patterns", "pattern-either")):
-                fail(f"{rid}: search rule has no pattern/patterns/pattern-either")
+            if not any(k in rule for k in ("pattern", "patterns", "pattern-either", "pattern-regex")):
+                fail(f"{rid}: search rule has no pattern/patterns/pattern-either/pattern-regex")
 
         if "metadata" not in rule or "cwe" not in rule.get("metadata", {}):
             notes.append(f"{rid}: no CWE in metadata")
@@ -139,13 +153,19 @@ section("fixture annotations")
 
 expected_counts: dict[str, dict[str, int]] = {}
 
-for path in sorted(HERE.glob("*.java")):
+fixture_paths = sorted(HERE.glob("*.java")) + sorted(HERE.glob("*.xml"))
+for path in fixture_paths:
+    annot = ANNOT_BY_SUFFIX.get(path.suffix)
+    comment_prefix = COMMENT_PREFIX_BY_SUFFIX.get(path.suffix)
+    if annot is None:
+        continue
+
     lines = path.read_text().splitlines()
     counts = {"ruleid": 0, "ok": 0}
     seen_any = False
 
     for i, line in enumerate(lines):
-        m = ANNOT.search(line)
+        m = annot.search(line)
         if not m:
             continue
         seen_any = True
@@ -157,7 +177,7 @@ for path in sorted(HERE.glob("*.java")):
 
         # the annotated line must be followed by actual code
         nxt = next((l for l in lines[i + 1:] if l.strip()), "")
-        if not nxt.strip() or nxt.strip().startswith("//"):
+        if not nxt.strip() or nxt.strip().startswith(comment_prefix):
             fail(f"{path.name}:{i + 1}: annotation '{kind}: {rid}' is not above a code line")
 
     if not seen_any:

@@ -441,10 +441,21 @@ two were not stitched into one single running proof.
   from this finding's file-write. `RollingFile`, `Syslog`, `Kafka`, `JDBC`,
   etc. remain untested but plausible by the same generic `PluginBuilder`
   substitution mechanism.
-- **A Semgrep AST rule for this.** Every other finding in this ruleset has
-  a matching `.yaml`/`.java` rule pair scanning *Java source*. This
-  finding's dangerous pattern lives in **XML configuration content**
-  (`fileName="...${ctx:...}..."` with no accompanying validation), a
-  different rule shape (Semgrep's generic/XML matching, not Java AST) this
-  ruleset hasn't used yet — not written here; flagged as a natural next
-  step rather than assumed out of scope.
+- **A Semgrep rule for this.** Written since: `../../log4j-mdc-path-traversal.yaml`,
+  with fixtures at `../../log4j-mdc-path-traversal.xml`. A different rule
+  *shape* from every Java-source rule in this ruleset — the dangerous
+  pattern lives in XML configuration content, so it uses `pattern-regex`
+  under `languages: [generic]` rather than an AST pattern, and its fixture
+  uses `<!-- ruleid: ... -->`/`<!-- ok: ... -->` XML-comment annotations
+  (`validate.py` was extended to recognize this fixture style). Scoped
+  specifically to `fileName` as the immediate child of a `RoutingAppender`
+  `<Route>` element, deliberately excluding both the config-load-time-only
+  case (`${ctx:...}` outside any `Route`, a materially weaker global-context
+  read, not the live per-event mechanism this finding is about) and the
+  `$${ctx:...}` escaped form (inert inside a `Route` child, confirmed by
+  this proof's own construction bug above). Pattern-matching behavior was
+  sanity-checked with Python's `re` (PCRE-equivalent for the
+  lookbehind/dotall features used) against the fixture, not assumed
+  correct — real verification of `semgrep --test` is still CI's job, the
+  same as every other rule in this ruleset, since this sandbox cannot
+  install Semgrep.

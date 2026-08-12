@@ -173,8 +173,12 @@ request, not a request that merely also reaches an unintended extra host.
   flagged the same way the path-traversal finding flagged untested
   appender types, now with one more (`Http`) moved from "plausible" to
   "confirmed."
-- **A Semgrep rule for this.** Same limitation as the path-traversal
-  finding: the dangerous pattern lives in XML configuration content
-  (`url="...${ctx:...}..."` with no validation), not Java source — this
-  ruleset's existing Java-AST rule shape doesn't cover it. Not written
-  here.
+- **A Semgrep rule for this.** Written since: `../../log4j-mdc-ssrf.yaml`,
+  with fixtures at `../../log4j-mdc-ssrf.xml` — same shape and same
+  reasoning as `log4j-mdc-path-traversal.yaml` (`pattern-regex` under
+  `languages: [generic]`, scoped to the `Route`-child case only, the
+  `$${ctx:...}` escaped form excluded via the same negative lookbehind).
+  The `url` attribute name is matched generically rather than scoped to
+  `<Http>` specifically, since the underlying mechanism (every
+  `PluginBuilderAttribute` goes through the identical substitute-then-convert
+  path) isn't specific to that one appender type either.

@@ -93,6 +93,8 @@ What `validate.py` **does** verify locally, and passes:
 |---|---|---|---|---|
 | `log4j-jmx-remote-reconfig` | CWE-306 | `MBeanServer.invoke(..., "setConfigText"/"setConfigLocationUri", ...)` | **INFO** (not WARNING — see below) | Only if JMX remote management is separately exposed without auth, invisibly to source review — not a Log4j bug |
 | `log4j-jndi-injection` | CWE-74 | `Context.lookup` | WARNING | No — gated behind explicit opt-in |
+| `log4j-mdc-path-traversal` | CWE-22 | `fileName="...${ctx:...}..."` inside a `RoutingAppender` `<Route>` child | WARNING | **Yes** — no config-authoring trust needed at all, only an unvalidated value reaching `ThreadContext`; see below |
+| `log4j-mdc-ssrf` | CWE-918 | `url="...${ctx:...}..."` inside a `RoutingAppender` `<Route>` child | WARNING | **Yes** — same as `log4j-mdc-path-traversal`, different sink; see below |
 | `log4j-script-injection` | CWE-94 | `ScriptEngine.eval` | WARNING | No — config-controlled input only |
 | `log4j-sql-injection` | CWE-89 | `prepareStatement` / `execute*` | WARNING | No — config-controlled input only |
 | `log4j-ssl-hostname-verification` | CWE-297 | `SSLSocket.startHandshake()` | WARNING | **Yes** — network MITM, no config access needed, but impact is log-stream confidentiality/integrity only, no RCE (see below) |
@@ -100,9 +102,19 @@ What `validate.py` **does** verify locally, and passes:
 | `log4j-xinclude` | CWE-611 | `setXIncludeAware(true)` | WARNING | No — same config-file trust boundary as `log4j-xxe`; see below for what makes it a genuinely separate gap, not a duplicate |
 | `log4j-xxe` | CWE-611 | `newDocumentBuilder` | WARNING | No — parses the trusted config file itself |
 
-28 positive, 18 negative, and 3 `todoruleid` (known-gap, not enforced)
+30 positive, 24 negative, and 3 `todoruleid` (known-gap, not enforced)
 fixture cases. Each rule's `metadata.reachability` field carries the
 specific evidence (see "Not reachable from unauthenticated input" below).
+
+`log4j-mdc-path-traversal` and `log4j-mdc-ssrf` are a different rule
+*shape* from the other eight: their dangerous pattern lives in XML
+*configuration content*, not Java source, so they use `pattern-regex`
+under `languages: [generic]` instead of an AST pattern against `.java`
+files, and their fixtures (`log4j-mdc-path-traversal.xml`,
+`log4j-mdc-ssrf.xml`) use `<!-- ruleid: ... -->`/`<!-- ok: ... -->`
+XML-comment annotations instead of `// ruleid: ...`. `validate.py` was
+extended to recognize both fixture styles rather than assuming every
+future rule would be Java-only.
 
 ## `log4j-jmx-remote-reconfig`: a sink found while asking "is this even a bug?" — and then downgraded for the same reason
 
@@ -149,7 +161,7 @@ this ruleset hadn't used before, now added alongside its own established
 narrative `grounding`/`reachability`/`impact` fields rather than replacing
 them.
 
-## Path traversal via untrusted MDC data — a finding, not (yet) a rule
+## Path traversal via untrusted MDC data — `log4j-mdc-path-traversal`, and the same mechanism reaching a second sink, `log4j-mdc-ssrf`
 
 Asked to keep checking other areas — specifically "business logic," past
 the injection sinks and config-delivery vectors this ruleset otherwise
@@ -169,10 +181,10 @@ legitimate, not crafted maliciously — plus one
 `ThreadContext.put("tenant", "../marker")` standing in for an unvalidated
 request header, produced a real file outside the intended logging
 directory. **No config-authoring trust required** — unlike every other
-rule in this ruleset (`log4j-ssl-hostname-verification` was previously the
-only exception; this is a second, and it needs even less). Confirmed
-directly, not assumed: the escaped file's *contents* are exactly what
-`PatternLayout` rendered (the logged message, verbatim) — the same
+Java-source rule in this ruleset (`log4j-ssl-hostname-verification` was
+previously the only exception; this is a second, and it needs even less).
+Confirmed directly, not assumed: the escaped file's *contents* are exactly
+what `PatternLayout` rendered (the logged message, verbatim) — the same
 mechanism controls both the destination and the payload, no second bug
 needed.
 
@@ -185,11 +197,46 @@ boundary-confusion class as `X-Forwarded-For` spoofing) — plus why this is
 a *write* primitive rather than the *read* primitives
 `log4j-xxe`/`log4j-xinclude` demonstrated.
 
-Not yet a Semgrep rule: the dangerous pattern here lives in XML
+**Followed up rather than left as "plausible, not tested":** does the same
+per-event substitution reach an appender attribute other than a file path?
+Yes — `HttpAppender.Builder#url` is a `java.net.URL`-typed
+`@PluginBuilderAttribute`, but `PluginBuilderAttributeVisitor.visit()`
+substitutes-then-converts every attribute identically regardless of
+declared type, and `TypeConverters.UrlConverter` converts with a bare
+`new URL(s)`, no host/scheme validation — the same shape as
+`FileManager`'s unchecked `new File(filename)`. `MdcSsrfProof.java` proves
+it against two real local HTTP listeners: an operator template
+`url="http://${ctx:target}/report"` plus one `ThreadContext.put()` fully
+redirected the outbound request to an attacker-chosen host — the
+attacker's listener received it, the operator's intended one never did.
+This is `log4j-mdc-ssrf`: Server-Side Request Forgery, where the blast
+radius is the application process's *network position* rather than its
+filesystem permissions (cloud metadata endpoints, internal-only admin
+APIs, other firewalled services). Full writeup: `MDC_SSRF_FINDING.md`.
+
+**Both are a different rule shape from every rule above them**, and from
+`log4j-jmx-remote-reconfig` too: the dangerous pattern lives in XML
 *configuration content* (an unvalidated `${ctx:...}` inside a `fileName`
-attribute), not Java source — every rule in this ruleset so far scans
-`.java` files. Recorded as a real finding with a real proof rather than
-forced into the existing rule shape just to have one.
+or `url` attribute, specifically as the immediate child of a `RoutingAppender`
+`<Route>` element — scoped there deliberately, since outside a `Route`
+the same `${ctx:...}` only resolves once at config-load time against the
+global context, not a live per-event snapshot), not Java source. Both use
+`pattern-regex` under `languages: [generic]` rather than an AST pattern —
+the pragmatic, fully-deterministic choice given this sandbox cannot
+install Semgrep to verify generic-mode tokenizer behavior directly
+(sanity-checked instead with Python's `re`, PCRE-equivalent for the
+lookbehind/dotall features used, against both fixtures: exactly one match
+each, exactly on the annotated vulnerable line, none of the annotated safe
+lines matched — real verification of the pattern's own logic, not a
+substitute for `semgrep --test` against the actual engine, which CI still
+runs). Both rules deliberately exclude the `$${ctx:...}` escaped form via
+a negative lookbehind: `manual/appenders/delegating.adoc`'s own `[WARNING]`
+confirms `Route` children are evaluated unescaped, so a `$$`-escaped value
+is left as inert literal text instead of a live substitution — confirmed
+the hard way, not just from the docs: this session's own first proof draft
+made exactly that mistake copying `Routes`' own `pattern` escaping
+convention, and the debug log showed the unresolved literal string instead
+of a substitution.
 
 ## `log4j-xinclude`: a gap `log4j-xxe`'s hardening doesn't cover
 
