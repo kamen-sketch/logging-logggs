@@ -19,9 +19,13 @@ rules:
         startup -- not from remote, unauthenticated network input. The rule
         is a general hardening check, useful for other XML parsing code
         (present or future) that lacks XmlConfiguration's unconditional
-        hardening, rather than a live finding against XmlConfiguration
-        itself, which is already fully hardened with no configuration flag
-        to disable it.
+        hardening against classic DTD-based external entities, rather than a
+        live finding against XmlConfiguration itself, which cannot disable
+        THAT specific hardening via any configuration flag. This rule does
+        not cover XInclude, though, which the same newDocumentBuilder() call
+        also enables unconditionally and is NOT restricted by this
+        hardening at all -- see log4j-xinclude for that separate, still-open
+        gap in the same method.
     message: >-
       A DocumentBuilderFactory is used without disabling DTD and external-entity
       processing, so a configuration file can read local files or reach the

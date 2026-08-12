@@ -32,6 +32,7 @@ is what these proofs check, per rule:
 |---|---|---|
 | `log4j-jndi-injection` | a log message containing `${jndi:ldap://...}`, through the real formatting/lookup pipeline | `MessagePatternConverter`, `Interpolator`, `JndiLookup`, `JndiManager` |
 | `log4j-xxe` | a malicious external-entity document, through the real config XML parser | `XmlConfiguration.newDocumentBuilder()` (package-private, called from its own package) |
+| `log4j-xinclude` | a malicious `<xi:include>` document, through the SAME real config XML parser | `XmlConfiguration.newDocumentBuilder()` (same method as `log4j-xxe`, a different mechanism it doesn't harden) |
 | `log4j-sql-injection` | a malicious "table name," through the real JDBC appender's manager construction | `JdbcDatabaseManager.getManager()`, `ColumnConfig` |
 | `log4j-script-injection` | a script, through the real script engine discovery and execution | `ScriptManager`, a real `javax.script.ScriptEngineFactory` registered via `META-INF/services` |
 | `log4j-ssl-hostname-verification` | a real local TLS server presenting a certificate for the WRONG hostname | `SslConfiguration`, `SslSocketManager.createSocket()` (private, reached via reflection) |
@@ -67,9 +68,22 @@ attempt surfaces as a real `NamingException` at the real `javax.naming`
 boundary in this sandbox, since no `InitialContext` provider is registered —
 that exception is itself proof the call was reached, not evidence of a bug).
 
-**XXE**: there is no vulnerable case to show against real source at all.
-`XmlConfiguration.newDocumentBuilder()` calls its hardening unconditionally,
-with no configuration flag to disable it — stricter than the JNDI case.
+**XXE**: there is no vulnerable case to show against real source for classic
+DTD-based external entities specifically. `XmlConfiguration.newDocumentBuilder()`
+calls its hardening unconditionally, with no configuration flag to disable
+it — stricter than the JNDI case.
+
+**XInclude — found by re-checking that XXE claim, not by assuming it held**:
+the same `newDocumentBuilder()` call also enables XInclude unconditionally
+(`factory.setXIncludeAware(true)`), and XInclude is a *separate* JAXP
+mechanism the DTD hardening above does not touch at all. A crafted
+`<xi:include href="file:///path" parse="text"/>` reads the target as raw
+text — confirmed against the real method, a real local file leaked
+verbatim. Also confirmed: `javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING`,
+often assumed to be a blanket XML-safety switch, does **not** block this —
+tested directly rather than trusted from documentation. The only
+mitigation that worked in this session's testing was not enabling
+XInclude at all.
 
 **SQL**: the real `JdbcDatabaseManager.getManager()` — the exact method a
 configured `<JDBC>` appender calls — was driven with a `DROP TABLE` payload

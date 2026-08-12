@@ -40,6 +40,8 @@ run_proof() {
 run_proof JndiRealSourceProof "$HERE/JndiRealSourceProof.java"
 run_proof org.apache.logging.log4j.core.config.xml.XxeRealSourceProof \
   "$HERE/org/apache/logging/log4j/core/config/xml/XxeRealSourceProof.java"
+run_proof org.apache.logging.log4j.core.config.xml.XIncludeRealSourceProof \
+  "$HERE/org/apache/logging/log4j/core/config/xml/XIncludeRealSourceProof.java"
 run_proof SqlRealSourceProof "$HERE/SqlRealSourceProof.java"
 
 "$HERE/gen-ssl-certs.sh"

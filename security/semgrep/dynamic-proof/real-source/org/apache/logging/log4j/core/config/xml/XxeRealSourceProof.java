@@ -42,11 +42,14 @@ class XxeRealSourceProof {
         }
         System.out.println("All checks passed.");
         System.out.println("\nNote: there is no \"vulnerable\" case to demonstrate here against real "
-                + "source -- XmlConfiguration.newDocumentBuilder() unconditionally calls "
-                + "disableDtdProcessing() for every DocumentBuilder it ever returns. Unlike the "
-                + "JNDI case (config-flag opt-out exists), this hardening is not configurable at "
-                + "all in the current source -- confirmed by reading newDocumentBuilder()'s real "
-                + "implementation, not assumed.");
+                + "source, SPECIFICALLY for classic DTD-based external entities -- "
+                + "XmlConfiguration.newDocumentBuilder() unconditionally calls "
+                + "disableDtdProcessing() for every DocumentBuilder it ever returns, with no "
+                + "configuration flag to disable that. This does NOT mean newDocumentBuilder() is "
+                + "fully hardened, though: the same method also unconditionally enables XInclude, "
+                + "a separate JAXP mechanism disableDtdProcessing() does not touch at all -- see "
+                + "XIncludeRealSourceProof in this same package for that gap, found while "
+                + "investigating this one further.");
     }
 
     /** Calls the REAL XmlConfiguration.newDocumentBuilder(), unmodified, package-private. */

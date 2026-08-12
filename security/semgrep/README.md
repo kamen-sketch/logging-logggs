@@ -87,11 +87,39 @@ What `validate.py` **does** verify locally, and passes:
 | `log4j-sql-injection` | CWE-89 | `prepareStatement` / `execute*` | WARNING | No — config-controlled input only |
 | `log4j-ssl-hostname-verification` | CWE-297 | `SSLSocket.startHandshake()` | WARNING | **Yes** — network MITM, no config access needed, but impact is log-stream confidentiality/integrity only, no RCE (see below) |
 | `log4j-unsafe-deserialization` | CWE-502 | `readObject()` | WARNING | No — sink removed from source entirely |
+| `log4j-xinclude` | CWE-611 | `setXIncludeAware(true)` | WARNING | No — same config-file trust boundary as `log4j-xxe`; see below for what makes it a genuinely separate gap, not a duplicate |
 | `log4j-xxe` | CWE-611 | `newDocumentBuilder` | WARNING | No — parses the trusted config file itself |
 
-23 positive, 14 negative, and 3 `todoruleid` (known-gap, not enforced)
+25 positive, 15 negative, and 3 `todoruleid` (known-gap, not enforced)
 fixture cases. Each rule's `metadata.reachability` field carries the
 specific evidence (see "Not reachable from unauthenticated input" below).
+
+## `log4j-xinclude`: a gap `log4j-xxe`'s hardening doesn't cover
+
+Found while re-verifying `log4j-xxe`'s own claim that
+`XmlConfiguration.newDocumentBuilder()` is "fully hardened, no configuration
+flag to disable it." That claim is *true* for classic DTD-based external
+entities — but the same method (the only call site in this codebase) also
+calls `factory.setXIncludeAware(true)` unconditionally, and XInclude
+(`<xi:include href="...">`) is a **completely separate JAXP mechanism**
+disabling DTD processing does not touch at all.
+
+Confirmed empirically (`dynamic-proof/real-source/org/apache/logging/log4j/core/config/xml/XIncludeRealSourceProof.java`),
+including a specific check worth calling out: `javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING`
+is commonly assumed to be a blanket XML-safety switch. It is **not**, for
+this mechanism — setting it `true` did not stop `<xi:include
+href="file:///etc/passwd" parse="text"/>` from reading a real local file's
+contents in this session's testing. The only mitigation found to actually
+work was not enabling XInclude at all
+(`setXIncludeAware(false)`).
+
+This runs against the same intellectual-honesty concern this whole ruleset
+has tried to hold itself to: `log4j-xxe`'s own message previously
+overclaimed completeness for the method it was scoped to. It's fixed now
+(both the rule's metadata and `XxeRealSourceProof`'s own printed note
+cross-reference this), but it's worth naming directly — a security rule
+should be re-checked against its own claims, not just against the code it
+scans.
 
 ## Not reachable from unauthenticated input — except one — but not a false positive either
 
@@ -291,6 +319,7 @@ log4j-script-injection.yaml / .java
 log4j-sql-injection.yaml / .java
 log4j-ssl-hostname-verification.yaml / .java
 log4j-unsafe-deserialization.yaml / .java
+log4j-xinclude.yaml / .java
 log4j-xxe.yaml / .java
 validate.py      local checks (no Semgrep needed)
 run-tests.sh     validate.py, then semgrep --test if available
