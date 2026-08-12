@@ -197,8 +197,17 @@ verified either way: whether a `readonly`-role JMX principal can even
 invoke this at all (standard JMX access controllers are understood to
 reserve `invoke()` operations for `readwrite` roles), which would narrow
 this further than "JMX reachable" to "JMX reachable and either
-unauthenticated or granted write access." Full ranking of everything that
-holds vs. what was retracted is in
+unauthenticated or granted write access."
+
+Asked to search more broadly rather than narrower, across every module in
+this monorepo — not just `log4j-core` — the only other thing found was a
+refinement of vector 4 (`log4j-spring-cloud-config-client` triggers
+reconfiguration instantly via Spring's own refresh event instead of
+waiting on `monitorInterval`'s poll; `monitorInterval` is still required
+either way, an initial guess that it wasn't got tested and disproved by
+the proof itself). No sixth, independent vector turned up. Full ranking of
+everything that holds vs. what was retracted, and the closing assessment
+of that broader search, is in
 `dynamic-proof/real-source/CONFIG_DELIVERY_VECTORS.md`.
 
 ## Not reachable from unauthenticated input — except one — but not a false positive either

@@ -192,8 +192,25 @@ JMX access controllers are understood to reserve `invoke()` for
 reachable *and* either unauthenticated or granted write access" — not
 independently verified in this session.
 
-`CONFIG_DELIVERY_VECTORS.md` has the full ranking of every vector that
-holds and every one retracted, and which other rules each reaches.
+Asked to search more broadly, not just narrower — every module in this
+monorepo, not only `log4j-core` — found one more thing worth recording:
+`log4j-spring-cloud-config-client` wires Log4j's reconfiguration to
+Spring's own environment-refresh event (fired by, among other things,
+Spring Boot Actuator's `/actuator/refresh`), letting an attacker who
+already controls a monitored config URL (vector 4) trigger the pickup
+instantly instead of waiting out `monitorInterval`. The first hypothesis
+building this was wrong and caught by the proof itself failing: it looked
+like this event mechanism might not need `monitorInterval` at all, but
+`WatchManager.start()` — the method that subscribes to it — turns out to
+be gated by the same `monitorInterval > 0` check regardless. Folded into
+vector 4 as a refinement, not counted as a new vector.
+
+No sixth, independent vector was found after this broader search
+(`log4j-web`'s servlet init-param resolution turned out to be the same
+trust level as vector 2's env var — deployer-set, not attacker-reachable
+on its own). `CONFIG_DELIVERY_VECTORS.md` has the full ranking of every
+vector that holds and every one retracted, and which other rules each
+reaches.
 
 **SQL**: the real `JdbcDatabaseManager.getManager()` — the exact method a
 configured `<JDBC>` appender calls — was driven with a `DROP TABLE` payload

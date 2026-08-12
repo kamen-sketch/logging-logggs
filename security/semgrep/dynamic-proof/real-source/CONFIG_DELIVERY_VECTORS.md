@@ -2,11 +2,14 @@
 
 Every rule except `log4j-ssl-hostname-verification` shares the same
 prerequisite: **the attacker needs to control what Log4j parses as
-configuration.** That prerequisite was investigated six times in this
-session, and — importantly — not every investigation held up. This note
-collects what was found, including the one vector that turned out to be
-wrong on closer inspection, and states plainly which rules each surviving
-vector applies to.
+configuration.** That prerequisite was investigated seven times in this
+session — including a broadened pass across `log4j-web`,
+`log4j-spring-boot`, and `log4j-spring-cloud-config-client`, not just
+`log4j-core` — and, importantly, not every investigation held up. This
+note collects what was found, including one vector that turned out to be
+wrong on closer inspection and one hypothesis that was tested and
+disproved mid-investigation, and states plainly which rules each
+surviving vector applies to.
 
 **One distinction this whole note depends on, worth stating up front**:
 "delivery vector" and "sink" are two different questions with two
@@ -31,7 +34,7 @@ finding — it does.
 | 1 | Direct filesystem write to `log4j2.xml` | Yes, by definition | No | No | No | Superseded — pushed back on as circular (see `XINCLUDE_FINDING.md`) |
 | 2 | Config-location property/env var pointed at a URL (`log4j.configurationFile` / `LOG4J_CONFIGURATION_FILE`) | No | Yes | Yes (attacker-hosted) | No | **Holds** — proven end to end |
 | 3 | Classpath resource shadowing via an uploaded plugin's own classloader | No | No | No | No | **Retracted as a general claim** — only works under a narrow, attacker-uncontrolled ordering |
-| 4 | Takeover of an already-trusted, polled config URL (`HttpWatcher`) | No | No | Yes (someone else's, taken over) | **Yes** | **Holds** — proven end to end |
+| 4 | Takeover of an already-trusted, polled config URL (`HttpWatcher`) | No | No | Yes (someone else's, taken over) | **Yes** | **Holds** — proven end to end. Refinement: with `log4j-spring-cloud-config-client` present, an Actuator `/actuator/refresh` call triggers reconfiguration instantly instead of waiting out the poll interval — `monitorInterval` is still required either way, an initial hypothesis that it wasn't was tested and disproved |
 | 5 | JMX `LoggerContextAdminMBean.setConfigText()` — config content pushed directly, no URL | No | No | **No** | No | **Holds as a delivery path — but not a Log4j bug.** The MBean is intended remote-management behavior; the security problem is entirely in JMX's own access control, external to Log4j. |
 
 Vector 4 was found in response to being asked for a way needing neither an
@@ -151,6 +154,39 @@ found only by reading actual debug output, not assumed) — a plain HTTP
 response with no `Last-Modified` header produces exactly that. Real HTTP
 config servers normally send one; the proof's test server was fixed to
 send one too, rather than the finding being quietly quiet-failed past.
+
+#### Vector 4 refinement: instant reconfiguration via Spring Cloud Config, not a new vector
+
+Broadening the search past the modules already checked (`log4j-web`,
+`log4j-spring-boot`) turned up `log4j-spring-cloud-config-client`, whose
+`Log4j2EventListener` reacts to Spring's own `EnvironmentChangeEvent` —
+fired by, among other things, Spring Boot Actuator's `/actuator/refresh`
+endpoint — by calling `WatchManager.checkFiles()` immediately.
+
+The first hypothesis this produced was wrong, and tested directly rather
+than trusted: `AbstractConfiguration.initializeWatchers()` has a branch
+that looks, in isolation, like it doesn't need `monitorInterval` —
+`watchManager.hasEventListeners() && configSource.getURL() != null &&
+monitorIntervalSeconds >= 0`. It registers the watched source either way.
+But `WatchManager.start()` — the method that actually subscribes to any
+`WatchEventService` at all — is separately gated by
+`AbstractConfiguration.isConfigurationMonitoringEnabled()`, which requires
+`watchManager.getIntervalSeconds() > 0` regardless of event listeners.
+Without `monitorInterval` set, the event mechanism has nothing to
+subscribe to. `XIncludeSpringCloudWatchProof.java`'s first run confirmed
+this the hard way (a failing assertion), not by reading the source and
+guessing correctly — so this is **not** a `monitorInterval`-free path,
+and is folded into vector 4 rather than numbered separately.
+
+What the corrected proof demonstrates instead, with `monitorInterval` set
+deliberately high (3600s, so a leak within the proof's few-second wait
+window can only be the event firing, not the periodic poll catching up):
+an attacker who has already taken over a monitored config URL (vector 4's
+real prerequisite, unchanged) doesn't have to wait out the poll interval
+if they can also reach a Spring Boot Actuator `/actuator/refresh`
+endpoint — itself a separate, well-documented category of exposure. A
+genuine, real refinement of vector 4's timing, not an escape from its
+core prerequisite.
 
 ### Vector 5 — holds, but unlike vector 3 this is the feature working exactly as designed
 
@@ -313,3 +349,30 @@ ruleset built around not overclaiming, "found a proof that passes" is not
 the same as "found a realistic scenario," and the gap between them is
 worth testing for directly, including when the result contradicts a claim
 already written down, rather than assumed away.
+
+## Was there a sixth, independent vector — asked directly, searched broadly
+
+After vector 5 turned out to be intended behavior rather than a bug, the
+direct follow-up was to search harder for something that is neither an
+admin feature's intended use nor gated behind an external
+compromise-something-else prerequisite (env var reachability, URL-takeover
+capability). That search was broadened past `log4j-core` alone to
+`log4j-web` (servlet context init-param resolution — same trust level as
+vector 2, deployer-set, not a new lower-privilege path),
+`log4j-spring-boot`, and `log4j-spring-cloud-config-client` (covered
+above, refines vector 4, doesn't replace it).
+
+No sixth, independent vector was found. Every path into config-content
+control in this codebase, across everything checked, resolves to one of
+three shapes: an external bug/misconfiguration granting the attacker
+control of a property or environment variable (vector 2), an external
+bug/misconfiguration compromising infrastructure the application already,
+legitimately trusts (vector 4), or an intended administrative feature
+exposed without the access control it assumes (vector 5, not really a
+"vector" into a Log4j gap at all). There is no code path found in this
+investigation where ordinary, unauthenticated application input —
+a log message, an HTTP request the application merely logs — influences
+what Log4j parses as configuration. That boundary is exactly what
+separates every finding in this ruleset from Log4Shell, and it held up
+against every angle tried here, not just the ones that were convenient to
+stop at.

@@ -67,6 +67,22 @@ else
   fi
 fi
 
+printf '\n\033[1m########## XIncludeSpringCloudWatchProof ##########\033[0m\n'
+SCW="$HERE/springcloud-watch"
+if ! javac -nowarn -proc:none -cp "$LOG4J_CP" -d "$OUT" \
+    "$SCW/TestWatchEventService.java" "$SCW/XIncludeSpringCloudWatchProof.java" 2> "$OUT/springcloud.compile.err"; then
+  echo "COMPILE FAILED:"; cat "$OUT/springcloud.compile.err"
+  total_failed=$((total_failed + 1))
+else
+  cp -r "$SCW/META-INF" "$OUT/"
+  if java -cp "$OUT:$LOG4J_CP" XIncludeSpringCloudWatchProof; then
+    :
+  else
+    echo "  (exited non-zero -- see FAIL lines above)"
+    total_failed=$((total_failed + 1))
+  fi
+fi
+
 printf '\n\033[1m########## log4j-unsafe-deserialization ##########\033[0m\n'
 echo "  No real-source proof -- the vulnerable component (TcpSocketServer/"
 echo "  UdpSocketServer) was removed from this branch entirely, not merely"
