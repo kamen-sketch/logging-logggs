@@ -170,10 +170,20 @@ legitimate, not crafted maliciously — plus one
 request header, produced a real file outside the intended logging
 directory. **No config-authoring trust required** — unlike every other
 rule in this ruleset (`log4j-ssl-hostname-verification` was previously the
-only exception; this is a second, and it needs even less). Full detail,
-including why this is a *write* primitive rather than the *read*
-primitives `log4j-xxe`/`log4j-xinclude` demonstrated, is in
-`dynamic-proof/real-source/MDC_PATH_TRAVERSAL_FINDING.md`.
+only exception; this is a second, and it needs even less). Confirmed
+directly, not assumed: the escaped file's *contents* are exactly what
+`PatternLayout` rendered (the logged message, verbatim) — the same
+mechanism controls both the destination and the payload, no second bug
+needed.
+
+`MDC_PATH_TRAVERSAL_FINDING.md` walks two concrete, real-world entry
+points step by step: a self-service multi-tenant signup flow where an
+unrestricted org/tenant-slug field becomes the MDC value (no special
+access needed beyond signing up), and a client-supplied header trusted
+without cross-checking against the authenticated session (the same trust-
+boundary-confusion class as `X-Forwarded-For` spoofing) — plus why this is
+a *write* primitive rather than the *read* primitives
+`log4j-xxe`/`log4j-xinclude` demonstrated.
 
 Not yet a Semgrep rule: the dangerous pattern here lives in XML
 *configuration content* (an unvalidated `${ctx:...}` inside a `fileName`

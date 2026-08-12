@@ -75,6 +75,87 @@ rather than assumed correct, then fixed to match how the working case
 (`name="Route-${sd:id}"`, unescaped) is actually written in the reference
 fixture.
 
+Also confirmed directly, not just claimed: the escaped file's *contents*
+are exactly what `PatternLayout`'s `%msg%n` rendered — the two log
+messages, verbatim:
+
+```
+$ cat /tmp/mdc-traversal-ESCAPED-<marker>.log
+request handled
+second line, same file handle
+```
+
+That's the same substitution mechanism as the path — whatever the
+application logs becomes the file's content, no separate vulnerability
+needed to control both the destination and the payload.
+
+## Real-world scenario, step by step
+
+Two different real entry points get an attacker's value into the MDC key
+a route pattern reads. Both are ordinary, unremarkable application
+patterns — neither requires discovering a special Log4j feature.
+
+**Scenario A — self-service multi-tenant signup, the lower bar.** Many
+SaaS products let a user pick their own organization/tenant slug at
+signup (`https://app.example.com/{tenant-slug}/...`, or a header derived
+from it), and use exactly this `RoutingAppender` pattern so each tenant's
+logs land in a separate file — a completely reasonable, common ops
+requirement.
+
+1. Attacker signs up for a free/trial account — no privileged access, no
+   network position, nothing beyond what any ordinary user can do.
+2. At signup, the app asks for an organization name or slug. If that
+   field isn't restricted to a safe charset (allowing only what looks
+   like a URL-safe identifier is a very plausible, common oversight for a
+   field most developers think of as "a name," not "a path segment"),
+   the attacker sets it to something like `../../../../var/www/html/pwn`.
+3. The app stores this value and, on every subsequent request from that
+   attacker (now an authenticated user of their own account), request-handling
+   code does the unremarkable thing: `ThreadContext.put("tenant",
+   session.getOrgSlug())` before logging proceeds, for correlation and
+   per-tenant routing exactly as configured.
+4. The attacker performs any action in the app that produces a log line
+   at or above the configured level — logging into their own account is
+   often enough by itself. `RoutingAppender` builds a fresh route appender
+   for that event, resolving `fileName="/var/log/myapp/tenants/${ctx:tenant}.log"`
+   against the poisoned MDC value, escaping the intended `tenants/`
+   directory.
+5. Content: the same request very plausibly logs other attacker-supplied
+   data too (a request path, a form field, an error message echoing input)
+   — which is what determines the escaped file's actual bytes, confirmed
+   directly above to be exactly what gets logged. A crafted message —
+   e.g. one shaped like a cron entry, an SSH `authorized_keys` line, or a
+   web-shell payload if the traversal reaches a web-served directory —
+   becomes the file's content the moment it's logged.
+6. Impact depends on where the traversal lands and what the process can
+   write: dropping an executable/interpretable file inside a served web
+   root (RCE), writing to `/etc/cron.d/` or a systemd path the process
+   can reach (persistence), appending to `~/.ssh/authorized_keys` for the
+   service account (remote access), or simply corrupting/overwriting
+   other application files the process has write access to.
+
+**Scenario B — a client-supplied header trusted without cross-checking.**
+Some deployments read the routing key from a request header instead of
+session state — `ThreadContext.put("tenant", request.getHeader("X-Tenant-Id"))`
+— intending it to be set by a trusted API gateway/reverse proxy in front
+of the app. This is the same trust-boundary-confusion class as the
+long-documented `X-Forwarded-For` spoofing problem: if the application is
+also reachable directly (a misconfigured load balancer, an internal
+network path, a staging environment without the gateway in front of it),
+or the gateway itself doesn't strip/overwrite the header from external
+clients, an attacker sends the traversal payload as the header value
+directly, needing no account and no signup step at all — a lower bar
+than Scenario A, but resting on a separate, not-universal deployment
+mistake (trusting an unvalidated header) rather than Scenario A's more
+generic "a self-service text field wasn't charset-restricted."
+
+Neither scenario requires config-authoring access, an environment
+variable, JMX, or a URL takeover — the config in both is exactly what
+operators are told to write for legitimate per-tenant log routing. The
+only thing either scenario needs is one unsanitized string reaching
+`ThreadContext`, which is a normal, everyday thing for logging code to
+do.
+
 ## Why this is a materially different, and materially more severe, finding
 
 1. **No config-authoring trust boundary.** Every other finding in this
@@ -89,14 +170,15 @@ fixture.
 2. **Write, not read.** Every prior file-content finding in this session
    (`log4j-xxe`, `log4j-xinclude`) was a *read* primitive. This is a
    *write* primitive: the resulting file's location is attacker-chosen
-   (via `../` depth) and its content is whatever the `PatternLayout`
-   renders — typically including the log message itself, which the
-   attacker plausibly also influences in the same request. Combined,
-   that is attacker-chosen content at an attacker-chosen path, limited
-   only by the process's own filesystem write permissions — a concrete
-   path toward webshell drops, cron persistence, SSH `authorized_keys`
-   injection, or overwriting other application files, depending on
-   deployment.
+   (via `../` depth), and its content — confirmed directly above, not
+   assumed — is exactly whatever `PatternLayout` renders, typically
+   including the log message itself, which the same request very
+   plausibly also influences. Combined, that is attacker-chosen content
+   at an attacker-chosen path, limited only by the process's own
+   filesystem write permissions — a concrete path toward webshell drops,
+   cron persistence, SSH `authorized_keys` injection, or overwriting
+   other application files, depending on deployment (see "Real-world
+   scenario, step by step" below for both).
 3. **The prerequisite is a common, legitimate feature, not a
    misconfiguration.** Unlike the JMX finding (`log4j-jmx-remote-reconfig`,
    downgraded to INFO specifically because reaching it needs *disabled-
