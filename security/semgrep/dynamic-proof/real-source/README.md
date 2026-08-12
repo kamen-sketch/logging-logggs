@@ -83,7 +83,11 @@ verbatim. Also confirmed: `javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING`,
 often assumed to be a blanket XML-safety switch, does **not** block this —
 tested directly rather than trusted from documentation. The only
 mitigation that worked in this session's testing was not enabling
-XInclude at all.
+XInclude at all. Same trust boundary as XXE, **not** unauthenticated remote
+input — see `XINCLUDE_FINDING.md` in this directory for the full
+prerequisite/impact writeup (including why it's a marginal escalation, not
+an initial foothold, and why `monitorInterval` is a real amplifier once the
+config-write prerequisite holds).
 
 **SQL**: the real `JdbcDatabaseManager.getManager()` — the exact method a
 configured `<JDBC>` appender calls — was driven with a `DROP TABLE` payload

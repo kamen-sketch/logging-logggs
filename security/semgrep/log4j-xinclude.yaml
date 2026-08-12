@@ -33,7 +33,16 @@ rules:
         javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, often assumed to be
         a blanket XML-safety switch, does NOT block it either -- confirmed
         empirically, not from documentation. The only confirmed fix in this
-        session's testing was not enabling XInclude at all.
+        session's testing was not enabling XInclude at all. Why this stays
+        MEDIUM rather than critical (see XINCLUDE_FINDING.md for the full
+        writeup): the read has no built-in exfiltration channel -- the
+        included content lands in the config DOM, consumed internally, not
+        handed back to the attacker by this mechanism itself; an attacker
+        who can already write/redirect the config file usually has
+        significant access already, so this is a marginal escalation, not
+        an initial foothold; and monitorInterval's auto-reconfigure is a
+        real amplifier once that prerequisite holds, since a rewritten
+        config takes effect without a restart.
     message: >-
       DocumentBuilderFactory.setXIncludeAware(true) is enabled. XInclude
       (<xi:include href="...">) is a separate mechanism from DTD-based

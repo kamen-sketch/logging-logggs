@@ -121,6 +121,18 @@ cross-reference this), but it's worth naming directly — a security rule
 should be re-checked against its own claims, not just against the code it
 scans.
 
+Reachability here is **not** unauthenticated — same config-file trust
+boundary as `log4j-xxe`, re-verified line-by-line against
+`XmlConfiguration.java` (the `log4j.configurationFile` property and
+`ConfigurationSource.fromUri` accept an attacker-redirectable path/URL, but
+someone still has to control what that path points to). See
+`dynamic-proof/real-source/XINCLUDE_FINDING.md` for the full prerequisite
+and impact writeup, including why this stays MEDIUM: no built-in
+exfiltration channel back to the attacker, an attacker who can already
+write the config usually already has significant access, and
+`monitorInterval` auto-reconfigure is a real amplifier once that
+prerequisite holds.
+
 ## Not reachable from unauthenticated input — except one — but not a false positive either
 
 After the false-negative fixes below, a further question came up: is any of
