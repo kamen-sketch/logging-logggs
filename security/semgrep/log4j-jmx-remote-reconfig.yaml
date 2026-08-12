@@ -92,4 +92,4 @@ rules:
       - pattern-either:
           - pattern: $MBS.invoke($OBJNAME, "setConfigText", ...)
           - pattern: $MBS.invoke($OBJNAME, "setConfigLocationUri", ...)
-          - pattern: java.lang.System.setProperty("log4j2.disable.jmx", "false")
+          - pattern: System.setProperty("log4j2.disable.jmx", "false")
