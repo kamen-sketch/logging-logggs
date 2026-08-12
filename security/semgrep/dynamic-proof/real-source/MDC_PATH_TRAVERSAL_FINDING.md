@@ -153,7 +153,7 @@ only thing either scenario needs is one unsanitized string reaching
 `ThreadContext`, which is a normal, everyday thing for logging code to
 do.
 
-## Does the fixed `.log` suffix actually limit impact? Tested, and the answer is largely no
+## Does the fixed `.log` suffix actually limit impact? Tested, and the answer is mixed — largely no, with real exceptions
 
 Pushed back on directly: the route template's fixed `.log` suffix
 (`fileName="...${ctx:tenant}.log"`) was treated above as if it mattered —
@@ -204,10 +204,44 @@ don't:
 - **Node's `require()` extension fallback** — confirmed above: an
   unrecognized extension does not stop `require()` from parsing the file
   as JavaScript.
-- **Any cron/systemd/CI job, or custom directory-watcher, that invokes an
-  interpreter on files by iterating a directory** (`for f in dir/*; do
-  bash "$f"; done`, a supervisor that runs whatever appears in a "jobs"
-  folder) rather than filtering by name pattern first.
+- **A custom directory-watcher, CI job, or ad-hoc deploy script that
+  invokes an interpreter on files by iterating a directory**
+  (`for f in dir/*; do bash "$f"; done`, a supervisor that runs whatever
+  appears in a "jobs" folder) rather than filtering by name pattern
+  first. Real, but *ad hoc* — application- or pipeline-specific, not a
+  standard OS mechanism, and not the same as the next point.
+
+**Checked and corrected, not assumed: the standard Linux cron mechanism
+is NOT one of these.** `/etc/cron.daily`, `/etc/cron.hourly`, and
+`/etc/cron.d` are processed via `run-parts` on Debian/Ubuntu-family
+systems, and `run-parts` **filters out any filename containing a period
+by default** — tested directly on this machine, not assumed from the man
+page:
+
+```
+$ ls
+evil.log  noext  script.sh          # all three chmod +x, all three echo their own name
+
+$ run-parts -v /the/dir              # DEFAULT mode, no flags
+run-parts: executing /the/dir/noext  # only the dotless one runs
+NOEXT EXECUTED
+
+$ run-parts --regex='.*' -v /the/dir # explicit override needed to include dotted names
+run-parts: executing /the/dir/evil.log
+EVIL.LOG EXECUTED
+...
+```
+
+So the most obvious candidate for "some standard Linux service picks up
+and runs a dropped `.log` file automatically" is, by default, a dead end
+— a real, honest correction, not the answer that would have made this
+finding tidier. (`/etc/logrotate.d/*` is a plausible *different* avenue —
+logrotate configs support a `postrotate ... endscript` block that runs
+arbitrary shell, and logrotate does not filter that directory's filenames
+the way `run-parts` does — but it needs write access to
+`/etc/logrotate.d/` specifically, usually root-only, and valid logrotate
+config syntax as the file's content rather than a plain script; not
+verified here.)
 
 What *does* still hold, honestly: reaching a web server's own
 extension-based execution path specifically (an HTTP request causing
@@ -218,6 +252,45 @@ handler configuration is unusually broad. That narrower claim was the
 one worth correcting; the general "the `.log` suffix makes this safe"
 framing was not accurate and has been removed from the impact reasoning
 below.
+
+## Does this apply to Java itself — the very runtime the vulnerable app is written in?
+
+Asked directly, and checked rather than assumed either way, since the
+answer differs by which JDK tool is asked:
+
+```
+$ java Payload.log          # content: a full Payload class, valid Java source
+Error: Could not find or load main class Payload.log
+Caused by: java.lang.ClassNotFoundException: Payload.log
+```
+
+The plain `java` launcher's single-file source-code execution (JEP 330,
+`java SomeFile.java` compiling and running a `.java` file directly with no
+separate `javac` step) **requires the exact `.java` suffix** — given
+`Payload.log`, `java` doesn't try to compile it as source at all; it
+assumes the argument is a fully-qualified class name and fails to find
+one. This one genuinely is extension-gated, unlike the four interpreters
+above.
+
+`jshell` — the JDK's own REPL/scripting tool, bundled with every JDK
+since 9 — is not:
+
+```
+$ echo "/exit" | jshell script.log     # content: a plain Java statement
+JSHELL-EXECUTED-DESPITE-DOT-LOG:4
+|  Welcome to JShell -- Version 21.0.10
+...
+```
+
+`jshell` executed the `.log` file's Java statements with zero regard for
+its extension, the same way PHP/Node/Python/Bash did. The practical
+relevance depends entirely on whether anything in a given deployment
+already invokes `jshell` (or embeds a JSR-223 scripting engine — which,
+notably, `log4j-script-injection`'s own `<ScriptFile>` mechanism does,
+independently of this finding) against a path this traversal can reach;
+nothing about a stock JVM process makes that happen on its own. Recorded
+as an honest, mixed result — one JDK tool is extension-sensitive, the
+other explicitly is not — rather than either overclaimed or dismissed.
 
 ## Why this is a materially different, and materially more severe, finding
 

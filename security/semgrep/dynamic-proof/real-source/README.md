@@ -242,7 +242,16 @@ Node.js, Python, and Bash all execute the resulting `.log` file's content
 with zero regard for its extension the moment anything invokes an
 interpreter on it — the same mechanism behind the well-known "log
 poisoning" LFI-to-RCE technique, except this bug supplies both halves of
-that classic two-bug chain by itself: `MDC_PATH_TRAVERSAL_FINDING.md`.
+that classic two-bug chain by itself. Also checked and reported both
+ways, not cherry-picked: whether a standard Linux service picks up a
+dropped `.log` file automatically (`run-parts`, behind `cron.daily`/
+`cron.d` on Debian-family systems, filters out any dotted filename by
+default — tested directly, a real dead end for that specific mechanism),
+and whether Java's own tooling is exempt from the extension issue
+(mixed: the plain `java` launcher's single-file source execution requires
+an exact `.java` suffix, but `jshell` executes a `.log` file's Java
+statements exactly like the other interpreters). Full detail:
+`MDC_PATH_TRAVERSAL_FINDING.md`.
 
 **SQL**: the real `JdbcDatabaseManager.getManager()` — the exact method a
 configured `<JDBC>` appender calls — was driven with a `DROP TABLE` payload
