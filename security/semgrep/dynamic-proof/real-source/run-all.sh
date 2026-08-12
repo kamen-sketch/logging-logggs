@@ -42,6 +42,9 @@ run_proof org.apache.logging.log4j.core.config.xml.XxeRealSourceProof \
   "$HERE/org/apache/logging/log4j/core/config/xml/XxeRealSourceProof.java"
 run_proof SqlRealSourceProof "$HERE/SqlRealSourceProof.java"
 
+"$HERE/gen-ssl-certs.sh"
+run_proof SslHostnameVerificationProof "$HERE/SslHostnameVerificationProof.java"
+
 printf '\n\033[1m########## ScriptRealSourceProof ##########\033[0m\n'
 if ! javac -nowarn -proc:none -cp "$LOG4J_CP" -d "$OUT" \
     "$HERE/TinyScriptEngine.java" "$HERE/ScriptRealSourceProof.java" 2> "$OUT/script.compile.err"; then

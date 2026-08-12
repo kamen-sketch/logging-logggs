@@ -27,6 +27,11 @@ path and shows the observable difference.
 | `XxeProof.java` | `log4j-xxe` | an external entity reads a local file and its contents leak into the parsed document | `XmlConfiguration`'s hardening sequence (`setExpandEntityReferences(false)` + three `setFeature` calls) blocks it — parsing fails, nothing leaks |
 | `ScriptInjectionProof.java` | `log4j-script-injection` | text passed to `ScriptEngine.eval()` is interpreted as commands and produces a real side effect (a file write) | resolving script text from a fixed registry by id means attacker text never reaches `eval()` at all |
 
+`log4j-ssl-hostname-verification` has no synthetic proof here — its
+`real-source/SslHostnameVerificationProof.java` (a real local TLS server
+with a mismatched certificate) is already the strongest possible evidence,
+so a `Proxy`-based stand-in would add nothing.
+
 None of this depends on network access, a real LDAP/RMI server, a real
 database, or a real scripting engine (the JDK dropped Nashorn in 15, and
 downloading GraalJS was blocked the same way `pip install semgrep` was — see

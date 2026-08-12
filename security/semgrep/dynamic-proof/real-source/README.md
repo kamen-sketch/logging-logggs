@@ -34,6 +34,7 @@ is what these proofs check, per rule:
 | `log4j-xxe` | a malicious external-entity document, through the real config XML parser | `XmlConfiguration.newDocumentBuilder()` (package-private, called from its own package) |
 | `log4j-sql-injection` | a malicious "table name," through the real JDBC appender's manager construction | `JdbcDatabaseManager.getManager()`, `ColumnConfig` |
 | `log4j-script-injection` | a script, through the real script engine discovery and execution | `ScriptManager`, a real `javax.script.ScriptEngineFactory` registered via `META-INF/services` |
+| `log4j-ssl-hostname-verification` | a real local TLS server presenting a certificate for the WRONG hostname | `SslConfiguration`, `SslSocketManager.createSocket()` (private, reached via reflection) |
 | `log4j-unsafe-deserialization` | nothing — investigated and found not reachable | see `DESERIALIZATION_FINDING.md` |
 
 ## What each proof found, concretely
@@ -89,3 +90,29 @@ log4j 1.x's `SocketServer`/`SocketNode`) genuinely existed — the changelog
 even shows its `ObjectInputFilter` mitigation (`LOG4J2-1863`) — but it has
 since been removed from this branch's source entirely, so there is nothing
 left to drive a reachability proof through.
+
+**SSL hostname verification**: found while following up on a different
+historical CVE (CVE-2020-9488, improper certificate validation in the SMTP
+appender) to check whether related code elsewhere had the same class of
+bug. `SslConfiguration.verifyHostName` defaults to `false`
+(`manual/appenders/network.adoc`), and `SslSocketManager.createSocket()`
+(the code `SocketAppender` uses, reached here via reflection since the
+method is `private`) only calls `setEndpointIdentificationAlgorithm("HTTPS")`
+-- the mechanism that actually performs hostname verification -- when that
+flag is `true`. Proven end to end with a real local `SSLServerSocket`
+(`gen-ssl-certs.sh` generates a self-signed cert for `attacker.invalid` and
+a truststore that trusts it, so the trust chain passes and only hostname
+verification could catch the mismatch): with the default, a real TLS
+handshake against a client connecting to `"localhost"` completes anyway;
+with `verifyHostName=true`, the same certificate is rejected with
+`CertificateException: No subject alternative DNS name matching localhost
+found.` No external network access is used — the whole proof runs on
+`127.0.0.1`.
+
+Unlike the other five rules, this one's reachability doesn't require config
+control or an explicit opt-in from the victim: a network man-in-the-middle
+(rogue Wi-Fi, compromised router) needs no access to the victim's systems
+at all, just network position. `HttpAppender`'s own `verifyHostName`
+defaults to `true` — the inconsistency between two TLS configuration
+surfaces in the same codebase is itself a sign this wasn't a deliberate,
+reviewed choice so much as a gap.

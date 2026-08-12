@@ -1,0 +1,59 @@
+# Not taint mode: like log4j-xxe, this is a missing-hardening flaw, not a
+# source-to-sink flow -- the rule matches an SSLSocket completing its
+# handshake without hostname verification ever being configured on it.
+rules:
+  - id: log4j-ssl-hostname-verification
+    languages: [java]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-297: Improper Validation of Certificate with Host Mismatch"
+      category: security
+      confidence: MEDIUM
+      references:
+        - https://nvd.nist.gov/vuln/detail/CVE-2020-9488
+      grounding: log4j-core/src/main/java/org/apache/logging/log4j/core/net/SslSocketManager.java:377-388
+      reachability: >-
+        Reachable by a network man-in-the-middle attacker positioned between
+        the Log4j-instrumented application and its configured remote TLS
+        destination (SocketAppender/SmtpAppender host) -- unlike the other
+        five rules in this ruleset, no authentication, configuration-file
+        access, or explicit opt-in is required from the victim's side, only
+        network position (a rogue Wi-Fi AP, a compromised router, a
+        malicious/coerced upstream ISP). Confirmed end to end against the
+        real compiled SslSocketManager (see
+        dynamic-proof/real-source/SslHostnameVerificationProof.java): a real
+        local TLS server presenting a certificate for "attacker.invalid" was
+        connected to successfully, with SslConfiguration.verifyHostName left
+        at its documented default (`false`,
+        manual/appenders/network.adoc:SslConfiguration-attr-verifyHostName),
+        while the client believed it was talking to "localhost" -- exactly
+        the mismatch hostname verification exists to catch, undetected. The
+        same attribute on HttpAppender defaults to `true`, an inconsistency
+        in the same codebase between otherwise-equivalent TLS configuration
+        surfaces.
+    message: >-
+      An SSLSocket completes its handshake (startHandshake()) without
+      setEndpointIdentificationAlgorithm(...) ever being configured on it.
+      TLS alone only proves the peer holds a certificate the truststore
+      trusts -- not that it is the intended host. A network
+      man-in-the-middle presenting any trusted certificate (their own
+      CA-issued cert for a different name, a compromised internal CA, a
+      certificate for a name the truststore is too permissive about) goes
+      undetected. Fix by calling socket.getSSLParameters(),
+      setEndpointIdentificationAlgorithm("HTTPS"), then
+      socket.setSSLParameters(...) before startHandshake() -- the exact
+      sequence SslSocketManager.createSocket() uses.
+
+    patterns:
+      - pattern: |
+          $SOCK = $FACTORY.createSocket();
+          ...
+          $SOCK.startHandshake();
+      - pattern-not: |
+          $SOCK = $FACTORY.createSocket();
+          ...
+          $PARAMS = $SOCK.getSSLParameters();
+          ...
+          $PARAMS.setEndpointIdentificationAlgorithm(...);
+          ...
+          $SOCK.startHandshake();

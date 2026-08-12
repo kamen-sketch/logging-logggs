@@ -85,20 +85,22 @@ What `validate.py` **does** verify locally, and passes:
 | `log4j-jndi-injection` | CWE-74 | `Context.lookup` | WARNING | No — gated behind explicit opt-in |
 | `log4j-script-injection` | CWE-94 | `ScriptEngine.eval` | WARNING | No — config-controlled input only |
 | `log4j-sql-injection` | CWE-89 | `prepareStatement` / `execute*` | WARNING | No — config-controlled input only |
+| `log4j-ssl-hostname-verification` | CWE-297 | `SSLSocket.startHandshake()` | **ERROR** | **Yes — network MITM, no config access needed** |
 | `log4j-unsafe-deserialization` | CWE-502 | `readObject()` | WARNING | No — sink removed from source entirely |
 | `log4j-xxe` | CWE-611 | `newDocumentBuilder` | WARNING | No — parses the trusted config file itself |
 
-22 positive, 13 negative, and 2 `todoruleid` (known-gap, not enforced)
+23 positive, 14 negative, and 3 `todoruleid` (known-gap, not enforced)
 fixture cases. Each rule's `metadata.reachability` field carries the
 specific evidence (see "Not reachable from unauthenticated input" below).
 
-## Not reachable from unauthenticated input — but not a false positive either
+## Not reachable from unauthenticated input — except one — but not a false positive either
 
 After the false-negative fixes below, a further question came up: is any of
 this reachable by an unauthenticated remote attacker in this codebase's
 actual current source? `dynamic-proof/real-source/` had already answered
 this per rule while investigating reachability generally (see that
-directory's README) — the answer is no, across all five:
+directory's README) — the answer is no for five of the six, and notably
+different for the sixth:
 
 - **JNDI**: three independent layers block the original Log4Shell vector
   specifically (message content is never interpolated; `Interpolator`
@@ -116,17 +118,34 @@ directory's README) — the answer is no, across all five:
 - **Deserialization**: stronger still — the vulnerable component
   (`TcpSocketServer`/`UdpSocketServer`) was removed from this branch's
   source entirely, so there is no sink left to reach at all.
+- **SSL hostname verification — different from the other five**: found
+  while following up on a related, older CVE (CVE-2020-9488, SMTP appender
+  certificate validation) to check nearby code for the same class of bug.
+  `SslConfiguration.verifyHostName` defaults to `false`
+  (documented in `manual/appenders/network.adoc`), and `SslSocketManager`
+  (used by `SocketAppender`, reachable via `SmtpAppender`/Syslog through
+  the same `SslConfiguration`) only enables hostname verification when
+  that flag is explicitly set to `true`. Proven end to end against a real
+  local TLS server presenting a mismatched certificate — see
+  `dynamic-proof/real-source/SslHostnameVerificationProof.java`. This one
+  **is** reachable by an unauthenticated attacker: specifically, a network
+  man-in-the-middle positioned between the application and its configured
+  log destination, who needs no config access, no authentication, and no
+  code execution on the victim at all — just network position (a rogue
+  Wi-Fi AP, a compromised router). `severity` stays `ERROR` for this rule,
+  unlike the other five.
 
-The common thread: every one of these requires **control over the Log4j
-configuration** (a materially higher trust boundary than "unauthenticated
-network attacker") or, for deserialization, doesn't exist as a live sink at
-all. `severity` was downgraded from `ERROR` to `WARNING` across the board
-to reflect that, and `log4j-jndi-injection`'s and
+The common thread among the other five: every one of them requires **control
+over the Log4j configuration** (a materially higher trust boundary than
+"unauthenticated network attacker") or, for deserialization, doesn't exist
+as a live sink at all. `severity` was downgraded from `ERROR` to `WARNING`
+for those five to reflect that (the sixth, SSL hostname verification, kept
+its `ERROR` for the opposite reason), and `log4j-jndi-injection`'s and
 `log4j-unsafe-deserialization`'s `confidence` moved from `HIGH` to `MEDIUM`
 to match the other three, which already accounted for this.
 
-**Why this isn't "false positive," despite not being remotely exploitable
-here**: `dynamic-proof/` (the non-real-source proofs) already established
+**Why the other five aren't "false positive," despite not being remotely
+exploitable here**: `dynamic-proof/` (the non-real-source proofs) already established
 that when these sinks *are* reached, they do real damage — a real JNDI
 lookup fires with the attacker's URL, a real `DROP TABLE` payload lands
 verbatim in the SQL text, real code runs during deserialization itself. A
@@ -167,17 +186,25 @@ pattern was found to fix. Marked `// todoruleid:` rather than `// ruleid:`
 so the ruleset is honest about what it currently can't catch, instead of
 either silently missing it or having a fixture that permanently fails.
 
+`log4j-ssl-hostname-verification` (added later, also a `pattern`/`pattern-not`
+rule) has the identical shape and so the identical limitation:
+`connectConditionallyVerified` was marked `// todoruleid:` from the start,
+rather than discovered as a CI failure the way the first two were — the
+category of bug was already known by then.
+
 `log4j-jndi-injection`, `log4j-script-injection`, and `log4j-sql-injection`
-are `mode: taint`. `log4j-xxe` and `log4j-unsafe-deserialization` are
-sequential-pattern search rules instead: XXE's missing-hardening flaw has no
-source to taint (it matches the construction of an unhardened parser), and
+are `mode: taint`. `log4j-xxe`, `log4j-unsafe-deserialization`, and
+`log4j-ssl-hostname-verification` are sequential-pattern search rules
+instead: XXE's and SSL's missing-hardening flaws have no source to taint
+(they match the construction of an unhardened factory/socket), and
 deserialization's first taint-mode attempt — a `by-side-effect` sanitizer on
 `setObjectInputFilter()` — turned out not to actually desanitize the
 variable for a later `readObject()` call (semgrep --test caught this as a
 false positive on the "safe" fixture). A sequential `pattern`/`pattern-not`
-requiring a filter call between construction and `readObject()` on the same
-variable proved simpler to get right, at the cost of matching any unfiltered
-`readObject()` rather than only ones from a provably untainted source.
+requiring a hardening call between construction and the dangerous call on
+the same variable proved simpler to get right, at the cost of matching any
+unguarded call rather than only ones from a provably untainted source, and
+of the conditional-branch limitation documented above.
 
 ### Sanitizers are modelled on the real fixes
 
@@ -212,6 +239,21 @@ configuration — a lower-severity position than a remote input — which is why
 its confidence is `MEDIUM`. It is included because config-supplied identifiers
 are a real, checkable pattern, not because it is a live vulnerability.
 
+**SSL hostname verification** — `SslSocketManager.createSocket()` calls
+`setEndpointIdentificationAlgorithm("HTTPS")` on the socket's
+`SSLParameters` before `startHandshake()`, but only inside
+`if (sslConfiguration.isVerifyHostName())`. The rule's "sanitizer" is that
+exact sequence:
+
+```java
+SSLParameters sslParameters = socket.getSSLParameters();
+sslParameters.setEndpointIdentificationAlgorithm("HTTPS");
+socket.setSSLParameters(sslParameters);
+```
+
+Unlike the other rules here, its severity was *not* lowered — see "Not
+reachable from unauthenticated input" above for why.
+
 ## Layout
 
 Semgrep's test runner pairs a rule with the fixture of the same basename, so
@@ -223,6 +265,7 @@ filename, so the fixture classes are deliberately package-private.
 log4j-jndi-injection.yaml / .java
 log4j-script-injection.yaml / .java
 log4j-sql-injection.yaml / .java
+log4j-ssl-hostname-verification.yaml / .java
 log4j-unsafe-deserialization.yaml / .java
 log4j-xxe.yaml / .java
 validate.py      local checks (no Semgrep needed)
