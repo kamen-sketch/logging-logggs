@@ -37,6 +37,7 @@ is what these proofs check, per rule:
 | `log4j-script-injection` | a script, through the real script engine discovery and execution | `ScriptManager`, a real `javax.script.ScriptEngineFactory` registered via `META-INF/services` |
 | `log4j-ssl-hostname-verification` | a real local TLS server presenting a certificate for the WRONG hostname | `SslConfiguration`, `SslSocketManager.createSocket()` (private, reached via reflection) |
 | `log4j-unsafe-deserialization` | nothing — investigated and found not reachable | see `DESERIALIZATION_FINDING.md` |
+| *(no rule yet)* | untrusted `ThreadContext` (MDC) data, through a `RoutingAppender`'s per-event dynamic file-path resolution | `RoutingAppender.append()`/`.createAppender()`, `FileManager` — see `MDC_PATH_TRAVERSAL_FINDING.md` |
 
 ## What each proof found, concretely
 
@@ -211,6 +212,32 @@ trust level as vector 2's env var — deployer-set, not attacker-reachable
 on its own). `CONFIG_DELIVERY_VECTORS.md` has the full ranking of every
 vector that holds and every one retracted, and which other rules each
 reaches.
+
+**Path traversal via untrusted MDC data — found by checking "business
+logic" areas outside injection sinks and config-delivery vectors, and
+materially different from everything above it**: every finding so far
+needed the attacker to control what Log4j parses as *configuration*.
+Asked to look elsewhere, `RoutingAppender` turned out to have a sink that
+needs none of that. `RoutingAppender.append()` resolves a route's nested
+appender node *fresh, per LogEvent*
+(`configuration.createConfiguration(appNode, event)`) — unlike an
+ordinary static `<File>` appender, whose `fileName` is fixed once at
+config-load time before any request exists. That per-event resolution
+means `fileName="...${ctx:tenant}.log"` — the exact, documented shape for
+per-tenant/per-key log routing — pulls a live value out of `ThreadContext`
+(MDC) into the literal file path on every event, and nothing between that
+substitution and `FileManager`'s plain `new File(filename)` checks for
+`../`. `MdcPathTraversalProof.java` proves it: a config identical in shape
+to this repository's own `log4j-routing-purge.xml` test fixture, entirely
+legitimate and unmodified, plus a single `ThreadContext.put("tenant",
+"../marker")` standing in for an unvalidated request header — produced a
+real file *outside* the intended logging directory. No config-authoring
+trust, no env var, no JMX, no URL — just ordinary application data
+reaching `ThreadContext`, which is an extremely common, unremarkable
+pattern. Full writeup, including why this is a *write* primitive (not
+read, like `log4j-xxe`/`log4j-xinclude`) and what wasn't verified (absolute-
+path payloads, other appender types as the route target, a matching
+Semgrep rule): `MDC_PATH_TRAVERSAL_FINDING.md`.
 
 **SQL**: the real `JdbcDatabaseManager.getManager()` — the exact method a
 configured `<JDBC>` appender calls — was driven with a `DROP TABLE` payload

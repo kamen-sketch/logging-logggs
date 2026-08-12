@@ -1,6 +1,9 @@
 # How does an attacker actually get malicious content into the config?
 
-Every rule except `log4j-ssl-hostname-verification` shares the same
+Every rule except `log4j-ssl-hostname-verification` **and**
+`log4j-jmx-remote-reconfig`'s sibling finding, `MDC_PATH_TRAVERSAL_FINDING.md`
+(a config-content *sink*, not covered by a rule yet, that needs no
+config-authoring trust at all — see that file), shares the same
 prerequisite: **the attacker needs to control what Log4j parses as
 configuration.** That prerequisite was investigated seven times in this
 session — including a broadened pass across `log4j-web`,

@@ -149,6 +149,38 @@ this ruleset hadn't used before, now added alongside its own established
 narrative `grounding`/`reachability`/`impact` fields rather than replacing
 them.
 
+## Path traversal via untrusted MDC data — a finding, not (yet) a rule
+
+Asked to keep checking other areas — specifically "business logic," past
+the injection sinks and config-delivery vectors this ruleset otherwise
+focuses on — turned up something materially different from every rule
+above: `RoutingAppender` resolves a route's nested appender node fresh,
+*per LogEvent* (`configuration.createConfiguration(appNode, event)`),
+unlike an ordinary static `<File>` appender resolved once at config-load
+time. That means `fileName="...${ctx:tenant}.log"` — the documented,
+unremarkable shape for per-tenant log routing — pulls a live `ThreadContext`
+(MDC) value into a literal file path on every event, and nothing checks
+that value for `../` before `FileManager`'s plain `new File(filename)`.
+
+Proven end to end (`dynamic-proof/real-source/MdcPathTraversalProof.java`):
+a config identical in shape to this repository's own
+`log4j-core-test/.../log4j-routing-purge.xml` test fixture — entirely
+legitimate, not crafted maliciously — plus one
+`ThreadContext.put("tenant", "../marker")` standing in for an unvalidated
+request header, produced a real file outside the intended logging
+directory. **No config-authoring trust required** — unlike every other
+rule in this ruleset (`log4j-ssl-hostname-verification` was previously the
+only exception; this is a second, and it needs even less). Full detail,
+including why this is a *write* primitive rather than the *read*
+primitives `log4j-xxe`/`log4j-xinclude` demonstrated, is in
+`dynamic-proof/real-source/MDC_PATH_TRAVERSAL_FINDING.md`.
+
+Not yet a Semgrep rule: the dangerous pattern here lives in XML
+*configuration content* (an unvalidated `${ctx:...}` inside a `fileName`
+attribute), not Java source — every rule in this ruleset so far scans
+`.java` files. Recorded as a real finding with a real proof rather than
+forced into the existing rule shape just to have one.
+
 ## `log4j-xinclude`: a gap `log4j-xxe`'s hardening doesn't cover
 
 Found while re-verifying `log4j-xxe`'s own claim that
