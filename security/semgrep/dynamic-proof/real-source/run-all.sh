@@ -45,6 +45,7 @@ run_proof org.apache.logging.log4j.core.config.xml.XIncludeRealSourceProof \
 run_proof XIncludeExfilProof "$HERE/XIncludeExfilProof.java"
 run_proof XIncludeRemoteConfigProof "$HERE/XIncludeRemoteConfigProof.java"
 run_proof XIncludeClasspathShadowProof "$HERE/XIncludeClasspathShadowProof.java"
+run_proof XIncludeWatcherTakeoverProof "$HERE/XIncludeWatcherTakeoverProof.java"
 run_proof SqlRealSourceProof "$HERE/SqlRealSourceProof.java"
 
 "$HERE/gen-ssl-certs.sh"

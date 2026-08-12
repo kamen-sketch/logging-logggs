@@ -241,6 +241,19 @@ worth having, in a ruleset built around not overclaiming: a proof that
 passes is not automatically a realistic scenario, and the gap between them
 is worth testing for, not assuming away.
 
+Asked directly for yet another way that needs neither an env var nor a
+plugin, one was found and it holds: Log4j's `HttpWatcher`
+(`AbstractConfiguration.monitorSource()`) polls a `monitorInterval`-configured
+config URL on its own. If an application already, legitimately loads its
+config from such a URL, a takeover of that URL's origin — subdomain
+takeover, expired-domain takeover, or compromise of the config server
+itself, all real, independent, well-documented vulnerability categories —
+delivers a new config with **no property, env var, or plugin touched at
+all**. Proven end to end, including a real bug caught in the proof's own
+test harness along the way (the mock HTTP server needed a `Last-Modified`
+header or Log4j silently declines to install any watcher):
+`XIncludeWatcherTakeoverProof.java`.
+
 The full, corrected comparison of every vector investigated in this
 session — including which of the *surviving* ones generalize to
 `log4j-sql-injection`/`log4j-script-injection` too, and the one honest

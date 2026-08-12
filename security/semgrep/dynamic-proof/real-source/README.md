@@ -141,9 +141,26 @@ attacker who merely gets a plugin loaded can reliably force. The proof and
 the full correction are kept on record in
 `CONFIG_DELIVERY_VECTORS.md` — not as a viable scenario, but because
 testing a claim harder instead of defending it is exactly the standard
-this ruleset holds itself to, wrong claims included. The vector that
-*does* hold (config-location property/env var pointing at a URL) and which
-other rules it reaches is also there.
+this ruleset holds itself to, wrong claims included.
+
+Asked once more for a way needing neither an env var nor a plugin, one
+held up. Log4j's `HttpWatcher` (`AbstractConfiguration.monitorSource()`)
+polls a `monitorInterval`-configured config URL on its own — a real,
+documented pattern for centralized config management. If an application
+already, legitimately loads config from such a URL, a takeover of that
+URL's origin (subdomain takeover, expired-domain takeover, or a
+compromise of the config server itself — real, independent, well-
+documented vulnerability categories) delivers a new config with no
+property, env var, or plugin touched at all: the property is set exactly
+once, by a simulated legitimate operator, before the takeover, and never
+touched again. Proven end to end
+(`XIncludeWatcherTakeoverProof.java`) — including a real bug caught in the
+proof's own test harness, not just in Log4j: the mock HTTP server needed
+a `Last-Modified` response header, or `monitorSource()` silently declines
+to install any watcher at all (logged plainly as "does not support
+dynamic reconfiguration," found only by reading the actual debug output).
+`CONFIG_DELIVERY_VECTORS.md` has the full ranking of every vector that
+holds and every one retracted, and which other rules each reaches.
 
 **SQL**: the real `JdbcDatabaseManager.getManager()` — the exact method a
 configured `<JDBC>` appender calls — was driven with a `DROP TABLE` payload

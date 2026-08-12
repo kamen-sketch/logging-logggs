@@ -165,9 +165,17 @@ touches Log4j first, true of almost any real app — the plugin is just
 handed the host's already-resolved context; nothing shadows. Only the
 opposite, attacker-uncontrolled ordering (the plugin's own classloader
 lineage is the very first thing anywhere to touch Log4j) leaks, which
-isn't something an attacker who merely gets a plugin loaded can force. Full
-correction, mechanism, and the ranking of what *does* hold (the env-var
-vector above, and which other rules it reaches) is in
+isn't something an attacker who merely gets a plugin loaded can force.
+
+Asked again for a way needing neither an env var nor a plugin, one held up:
+Log4j's `HttpWatcher` polls a `monitorInterval`-configured config URL on
+its own. If an application already, legitimately loads config from such a
+URL, a takeover of that URL's origin (subdomain takeover, expired-domain
+takeover, config-server compromise — real, independent vulnerability
+categories) delivers a new config with no property, env var, or plugin
+touched at all — proven end to end in
+`XIncludeWatcherTakeoverProof.java`. Full correction, both mechanisms, and
+the ranking of what holds vs. what was retracted is in
 `dynamic-proof/real-source/CONFIG_DELIVERY_VECTORS.md`.
 
 ## Not reachable from unauthenticated input — except one — but not a false positive either
